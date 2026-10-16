@@ -19,13 +19,15 @@ pub gc struct Settings {
 }
 
 pub fn settings_from(cfg: zokor.Config) -> Settings {
+    let sc = zokor.server_config_from(cfg);
+    sc.request_ids = false;
     return Settings {
         service_name: zokor.str_or(cfg, "SERVICE_NAME", "say"),
         port: zokor.require_port(cfg, "PORT"),
         api_keys: zokor.api_keys_from(cfg),
         cookie_keys: zokor.cookie_keys_from(cfg),
         jwt_auth: zokor.jwt_auth_from(cfg),
-        server: zokor.server_config_from(cfg),
+        server: sc,
         database_url: zokor.optional_dsn(cfg, "DATABASE_URL", ""),
         db_pool_size: zokor.int_or(cfg, "DB_POOL_SIZE", 10),
         redis_url: zokor.optional_dsn(cfg, "REDIS_URL", ""),

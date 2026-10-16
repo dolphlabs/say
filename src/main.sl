@@ -53,6 +53,8 @@ r.ready_check("db", db_ready);
 r.ready_check("cache", cache_ready);
 accounts.mount(r);
 
+settings.server.request_ids = false;
+
 let served = zokor.listen_and_serve_with(r, settings.port, settings.server);
 
 guard let _done = served else {
