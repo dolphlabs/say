@@ -92,6 +92,11 @@ fn fake_record_login_audit(f: FakeStore, tenant_id: str, account_id: str, meta: 
     return ok(true);
 }
 
+fn fake_record_logout_audit(f: FakeStore, tenant_id: str, account_id: str, meta: AuditMeta) -> result[bool, str] {
+    push(f.calls, "logout_audit " + account_id);
+    return ok(true);
+}
+
 fn fake_verify_email(f: FakeStore, tenant_id: str, email: str) -> result[bool, str] {
     push(f.calls, "verify_email " + email);
     if len(f.failure) > 0 { return err(f.failure); }
@@ -163,6 +168,7 @@ fn fake_accounts(f: FakeStore) -> Accounts[FakeStore] {
         list: fake_list,
         record_signup_audit: fake_record_signup_audit,
         record_login_audit: fake_record_login_audit,
+        record_logout_audit: fake_record_logout_audit,
         verify_email: fake_verify_email,
         confirm_age: fake_confirm_age
     }, fixed_id);

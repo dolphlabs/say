@@ -215,3 +215,48 @@ fn test_login_endpoint_flow() {
     let ep_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/login").json_body(empty_pass_body).build());
     assert(zokor.resp_status(ep_resp) == 422, zokor.resp_text(ep_resp));
 }
+
+fn test_logout_endpoint_flow() {
+    let r = router_under_test();
+    let reg_body = "{\"username\":\"logout_usr\",\"email\":\"logout@say.exchange\",\"password\":\"ValidPass123!\"}";
+    let reg_req = zokor.request(zokor.Method.POST, "/v1/accounts").json_body(reg_body).build();
+    let made = r.serve(reg_req);
+    assert(zokor.resp_status(made) == 201, zokor.resp_text(made));
+
+    let login_body = "{\"email\":\"logout@say.exchange\",\"password\":\"ValidPass123!\"}";
+    let login_req = zokor.request(zokor.Method.POST, "/v1/accounts/login").json_body(login_body).build();
+    let login_resp = r.serve(login_req);
+    assert(zokor.resp_status(login_resp) == 200, zokor.resp_text(login_resp));
+    let set_cookie = zokor.resp_header(login_resp, "set-cookie");
+    let semi = strings.find(set_cookie, ";");
+    let cookie_val = set_cookie;
+    if semi > 0 {
+        cookie_val = strings.slice(set_cookie, 0, semi);
+    }
+
+    let ok_action = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-age").header("cookie", cookie_val).build());
+    assert(zokor.resp_status(ok_action) == 200, zokor.resp_text(ok_action));
+
+    let logout_req = zokor.request(zokor.Method.POST, "/v1/accounts/logout")
+        .header("cookie", cookie_val)
+        .build();
+    let logout_resp = r.serve(logout_req);
+    assert(zokor.resp_status(logout_resp) == 200, zokor.resp_text(logout_resp));
+    assert(zokor.resp_json(logout_resp).get("ok").bool_or(false));
+    let cleared_cookie = zokor.resp_header(logout_resp, "set-cookie");
+    assert(strings.find(cleared_cookie, "say_session=") >= 0);
+    assert(strings.find(cleared_cookie, "Max-Age=0") >= 0);
+
+    let re_action = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-age").header("cookie", cookie_val).build());
+    assert(zokor.resp_status(re_action) == 401, zokor.resp_text(re_action));
+
+    let raw_val = strings.slice(cookie_val, len("say_session="), len(cookie_val));
+    let verified_raw = zokor.verify_signed("say_session", raw_val, r.state.settings.cookie_keys);
+    guard let token_str = verified_raw else { panic("signed cookie verification failed"); }
+
+    let bearer_action = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-age").header("authorization", "Bearer " + token_str).build());
+    assert(zokor.resp_status(bearer_action) == 401, zokor.resp_text(bearer_action));
+
+    let idemp_logout = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/logout").build());
+    assert(zokor.resp_status(idemp_logout) == 200);
+}

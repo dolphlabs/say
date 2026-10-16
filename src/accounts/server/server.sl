@@ -3,6 +3,7 @@ import "crypto";
 import "encoding";
 import "http";
 import "strings";
+import "time";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/auth" as auth;
@@ -14,6 +15,7 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     g.get("/check-username", check_username_availability);
     g.post("", register_account);
     g.post("/login", login_handler);
+    g.post("/logout", logout_handler);
     g.post("/verify-email", verify_email_handler);
     g.post("/verify-age", verify_age_handler);
     g.get("", list_accounts);
@@ -149,6 +151,23 @@ fn login_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return resp;
     }
     return with_cookie;
+}
+
+fn logout_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    let sess = auth.current_session(c);
+    if let claims = sess {
+        let now_s = time.wall() / 1000000000;
+        let rem_s = claims.exp - now_s;
+        let _rev = app.revoke_session(c.state, claims.jti, rem_s);
+        let meta = extract_client_meta(c);
+        let _aud = accounts.record_logout_audit(c.state.accounts, tenant(c), claims.sub, meta);
+    }
+    let resp = zokor.ok_json("{\"ok\":true}");
+    let clear_res = zokor.clear_cookie(resp, "say_session", "/", "");
+    guard let cleared = clear_res else {
+        return resp;
+    }
+    return cleared;
 }
 
 fn verify_email_handler(c: zokor.Ctx[app.App]) -> http.Response {

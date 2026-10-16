@@ -263,3 +263,8 @@ pub fn login[C](s: Accounts[C], tenant_id: str, email: str, raw_password: str, a
 
     return ok(acc);
 }
+
+pub fn record_logout_audit[C](s: Accounts[C], tenant_id: str, account_id: str, meta: AuditMeta) -> result[bool, str] {
+    let audit = s.store.record_logout_audit;
+    return audit(s.store.context, tenant_id, account_id, meta);
+}

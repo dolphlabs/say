@@ -67,7 +67,18 @@ fn test_session_cookie_lifecycle() {
     let unauth = r.serve(zokor.get_request("/me").build());
     assert(zokor.resp_status(unauth) == 401);
 
-    // Tampered cookie is 401
     let tampered = r.serve(zokor.get_request("/me").header("cookie", "say_session=tampered.fake_signature").build());
     assert(zokor.resp_status(tampered) == 401);
+
+    let verified_raw = zokor.verify_signed("say_session", c.value, s.cookie_keys);
+    guard let token_str = verified_raw else { panic("signed cookie verification failed"); }
+    let claims_res: result[SessionClaims, str] = jwt.verify(token_str, s.jwt_auth.keys[0]);
+    guard let claims = claims_res else { panic("jwt verify failed"); }
+    let _rev = app.revoke_session(r.state, claims.jti, 3600);
+
+    let revoked_resp = r.serve(zokor.get_request("/me").header("cookie", cookie_hdr).build());
+    assert(zokor.resp_status(revoked_resp) == 401);
+
+    let bearer_resp = r.serve(zokor.get_request("/me").header("authorization", "Bearer " + token_str).build());
+    assert(zokor.resp_status(bearer_resp) == 401);
 }

@@ -127,6 +127,10 @@ fn memory_record_login_audit(m: Memory, tenant_id: str, account_id: str, meta: s
     return ok(true);
 }
 
+fn memory_record_logout_audit(m: Memory, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+    return ok(true);
+}
+
 fn memory_verify_email(m: Memory, tenant_id: str, email: str) -> result[bool, str] {
     mutex_lock(m.lock);
     let key = strings.to_lower(email);

@@ -78,6 +78,36 @@ pub fn delete_verification_code(a: App, code: str) -> result[bool, str] {
     return cache.delete_key(c, key);
 }
 
+pub fn revoke_session(a: App, jti: str, seconds: int) -> result[bool, str] {
+    guard let c = a.cache else {
+        return err("no cache configured");
+    }
+    let ttl = seconds;
+    if ttl <= 0 {
+        ttl = 604800;
+    }
+    let key = "auth:revoked:" + jti;
+    return cache.set_ex(c, key, ttl, "1");
+}
+
+pub fn is_session_revoked(a: App, jti: str) -> bool {
+    if len(jti) == 0 {
+        return false;
+    }
+    guard let c = a.cache else {
+        return false;
+    }
+    let key = "auth:revoked:" + jti;
+    let r = cache.get(c, key);
+    guard let opt_val = r else {
+        return false;
+    }
+    if let _v = opt_val {
+        return true;
+    }
+    return false;
+}
+
 gc struct SendEmailJob {
     svc: email.Email,
     from_addr: str,

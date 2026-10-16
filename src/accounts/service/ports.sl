@@ -17,6 +17,7 @@ pub gc struct AccountStore[C] {
     list: fn(C, str, int, int) -> result[[domain.Account], str],
     record_signup_audit: fn(C, str, str, AuditMeta) -> result[bool, str],
     record_login_audit: fn(C, str, str, AuditMeta) -> result[bool, str],
+    record_logout_audit: fn(C, str, str, AuditMeta) -> result[bool, str],
     verify_email: fn(C, str, str) -> result[bool, str],
     confirm_age: fn(C, str, str) -> result[bool, str]
 }

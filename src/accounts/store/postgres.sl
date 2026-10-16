@@ -158,6 +158,21 @@ fn pg_record_login_audit(p: Postgres, tenant_id: str, account_id: str, meta: ser
     return ok(true);
 }
 
+fn pg_record_logout_audit(p: Postgres, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+    let job = AuditJob {
+        pool: p.pool,
+        account_id: account_id,
+        action: "ACCOUNT_LOGOUT",
+        ip_address: meta.ip_address,
+        user_agent: meta.user_agent,
+        fingerprint: meta.fingerprint,
+        detail_json: meta.detail_json,
+        timeout: p.timeout
+    };
+    spawn async_pg_record_audit(job);
+    return ok(true);
+}
+
 fn pg_verify_email(p: Postgres, tenant_id: str, email: str) -> result[bool, str] {
     let r = pg.pool_query(p.pool,
         "update accounts set email_verified_at = coalesce(email_verified_at, now()), verified_at = coalesce(verified_at, now()) where lower(email) = lower($1)",
