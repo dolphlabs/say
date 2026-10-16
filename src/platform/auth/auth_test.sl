@@ -29,3 +29,45 @@ fn test_a_missing_or_wrong_key_is_401() {
     let wrong = guarded().serve(zokor.get_request("/whoami").header("x-api-key", "nope").build());
     assert(zokor.resp_status(wrong) == 401);
 }
+
+fn me(c: zokor.Ctx[app.App]) -> http.Response {
+    let body = c.local("account_id") + ":" + c.local("username") + ":" + c.local("email");
+    return zokor.text(200, body);
+}
+
+fn session_router() -> zokor.Router[app.App] {
+    let m: map[str]str = {};
+    m["PORT"] = "8080";
+    m["COOKIE_KEYS"] = "0123456789012345678901234567890123456789";
+    m["JWT_SECRETS"] = "0123456789012345678901234567890123456789";
+    let r = zokor.new_router(app.for_tests(config.settings_from(zokor.config_from_values(m))));
+    r.before(require_session);
+    r.get("/me", me);
+    return r;
+}
+
+fn test_session_cookie_lifecycle() {
+    let r = session_router();
+    let s = r.state.settings;
+
+    let c_res = issue_session_cookie("acc_123", "user@say.exchange", "say_user", "USER", s.jwt_auth, s.cookie_keys);
+    guard let c = c_res else let e = err_of(c_res) { panic(e); }
+    assert(c.name == "say_session");
+    assert(c.path == "/");
+    assert(c.http_only);
+    assert(c.max_age == 604800);
+
+    // Call /me with valid cookie
+    let cookie_hdr = c.name + "=" + c.value;
+    let ok_resp = r.serve(zokor.get_request("/me").header("cookie", cookie_hdr).build());
+    assert(zokor.resp_status(ok_resp) == 200, zokor.resp_text(ok_resp));
+    assert(zokor.resp_text(ok_resp) == "acc_123:say_user:user@say.exchange");
+
+    // Missing cookie is 401
+    let unauth = r.serve(zokor.get_request("/me").build());
+    assert(zokor.resp_status(unauth) == 401);
+
+    // Tampered cookie is 401
+    let tampered = r.serve(zokor.get_request("/me").header("cookie", "say_session=tampered.fake_signature").build());
+    assert(zokor.resp_status(tampered) == 401);
+}

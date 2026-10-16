@@ -1,4 +1,5 @@
 import "http";
+import "strings";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/config" as config;
@@ -6,6 +7,8 @@ import "../../platform/config" as config;
 fn router_under_test() -> zokor.Router[app.App] {
     let m: map[str]str = {};
     m["PORT"] = "8080";
+    m["COOKIE_KEYS"] = "0123456789012345678901234567890123456789";
+    m["JWT_SECRETS"] = "0123456789012345678901234567890123456789";
     let cfg = zokor.config_from_values(m);
     let r = zokor.new_router(app.for_tests(config.settings_from(cfg)));
     mount(r);
@@ -97,6 +100,13 @@ fn test_verify_email_endpoint_flow() {
     let verified_json = zokor.resp_json(ok_resp);
     assert(verified_json.get("email_verified").bool_or(false));
     assert(verified_json.get("is_verified").bool_or(false));
+
+    // Verify session cookie was set
+    let set_cookie = zokor.resp_header(ok_resp, "set-cookie");
+    assert(strings.find(set_cookie, "say_session=") >= 0, "expected say_session cookie in " + set_cookie);
+    assert(strings.find(set_cookie, "HttpOnly") >= 0, "cookie must be HttpOnly");
+    assert(strings.find(set_cookie, "SameSite=Lax") >= 0, "cookie must be SameSite=Lax");
+    assert(strings.find(set_cookie, "Max-Age=604800") >= 0, "cookie must have 7-day max-age");
 
     // Replay with consumed code fails
     let replay_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-email").json_body(ok_body).build());

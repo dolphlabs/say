@@ -5,6 +5,7 @@ import "http";
 import "strings";
 import "zokor";
 import "../../platform/app" as app;
+import "../../platform/auth" as auth;
 import "../service" as accounts;
 
 pub fn mount(r: zokor.Router[app.App]) -> int {
@@ -150,7 +151,17 @@ fn verify_email_handler(c: zokor.Ctx[app.App]) -> http.Response {
     guard let acc = vr else let f = err_of(vr) {
         return failure(c, f);
     }
-    return zokor.ok_json(account_json(acc).render());
+    let resp = zokor.ok_json(account_json(acc).render());
+    let u_name = acc.username ?? "";
+    let cookie_res = auth.issue_session_cookie(acc.id, email_input, u_name, acc.kind, c.state.settings.jwt_auth, c.state.settings.cookie_keys);
+    guard let cookie = cookie_res else {
+        return resp;
+    }
+    let with_cookie_res = zokor.set_cookie(resp, cookie);
+    guard let with_cookie = with_cookie_res else {
+        return resp;
+    }
+    return with_cookie;
 }
 
 fn show_account(c: zokor.Ctx[app.App]) -> http.Response {
