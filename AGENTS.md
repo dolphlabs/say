@@ -2,6 +2,8 @@
 
 A zokor service, in slang. Read this before changing anything.
 
+DO NOT ADD COMMENTS TO CODE EXCEPT WHEN NECESSARY
+
 ## Commands
 
 - `make test`: every package's tests. `make check`: `zokor check`, tests

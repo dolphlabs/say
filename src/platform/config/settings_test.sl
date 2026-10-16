@@ -11,9 +11,19 @@ fn values(pairs: [str]) -> zokor.Config {
 }
 
 fn test_settings_are_read_once_and_checked() {
-    let cfg = values(["PORT", "8080", "API_KEYS", "acme:0123456789abcdef0123456789abcdef"]);
+    let cfg = values([
+        "PORT", "8080",
+        "API_KEYS", "acme:0123456789abcdef0123456789abcdef",
+        "COOKIE_KEYS", "dev-cookie-key-0123456789abcdef012345",
+        "JWT_SECRETS", "dev-jwt-secret-0123456789abcdef012345"
+    ]);
     let s = settings_from(cfg);
     assert(s.port == 8080);
+    assert(s.trading_fee == 1);
+    assert(s.min_order_notional == 2);
+    assert(s.season_grant_amount == 1000);
+    assert(s.dispute_window_seconds == 1800);
+    assert(s.timezone == "Africa/Lagos");
     let ok_cfg = zokor.check(cfg);
     guard let _ok = ok_cfg else let e = err_of(ok_cfg) { panic(e); }
 }
