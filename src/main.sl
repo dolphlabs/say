@@ -4,6 +4,7 @@ import "platform/app" as app;
 import "platform/config" as config;
 import "platform/db" as db;
 import "platform/cache" as cache;
+import "accounts/server" as accounts;
 
 fn db_ready(s: app.App) -> result[int, str] {
     guard let d = s.db else {
@@ -50,6 +51,7 @@ let r = zokor.new_router(state);
 r.health();
 r.ready_check("db", db_ready);
 r.ready_check("cache", cache_ready);
+accounts.mount(r);
 
 let served = zokor.listen_and_serve_with(r, settings.port, settings.server);
 
