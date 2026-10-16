@@ -147,3 +147,77 @@ fn test_verify_email_flow() {
     }
     panic("verifying nonexistent email should fail");
 }
+
+fn test_confirm_age_flow() {
+    let f = fake_store();
+    let accs = fake_accounts(f);
+    let none_str: opt[str] = none;
+    let meta = AuditMeta {
+        ip_address: none_str,
+        user_agent: none_str,
+        fingerprint: none_str,
+        detail_json: "{}"
+    };
+    let made = create_with_password(accs, "t1", "age_tester", "age@say.exchange", "ValidPass123!", none_str, meta);
+    guard let a = made else { panic("create_with_password failed"); }
+    assert(!domain.is_age_confirmed(a));
+    assert(!domain.is_eligible_for_grant(a));
+
+    let confirmed = confirm_age(accs, "t1", a.id);
+    guard let c = confirmed else { panic("confirm_age failed"); }
+    assert(domain.is_age_confirmed(c));
+
+    let ver = verify_email(accs, "t1", "age@say.exchange");
+    guard let v = ver else { panic("verify_email failed"); }
+    assert(domain.is_eligible_for_grant(v));
+
+    let bad = confirm_age(accs, "t1", "nonexistent_id");
+    guard let _b = bad else let e = err_of(bad) {
+        assert(e.why == Why.NotFound);
+        return;
+    }
+    panic("confirming age for nonexistent account should fail");
+}
+
+fn test_login_flow() {
+    let f = fake_store();
+    let accs = fake_accounts(f);
+    let none_str: opt[str] = none;
+    let meta = AuditMeta {
+        ip_address: some("127.0.0.1"),
+        user_agent: some("Mozilla/5.0"),
+        fingerprint: none_str,
+        detail_json: "{}"
+    };
+    let made = create_with_password(accs, "t1", "login_user", "login@say.exchange", "ValidPass123!", none_str, meta);
+    guard let a = made else { panic("create_with_password failed"); }
+
+    let ok_login = login(accs, "t1", "login@say.exchange", "ValidPass123!", meta);
+    guard let logged = ok_login else { panic("login by email failed"); }
+    assert(logged.id == a.id);
+
+    let ok_user_login = login(accs, "t1", "login_user", "ValidPass123!", meta);
+    guard let logged_u = ok_user_login else { panic("login by username failed"); }
+    assert(logged_u.id == a.id);
+
+    let wrong_pass = login(accs, "t1", "login@say.exchange", "WrongPass123!", meta);
+    guard let _wp = wrong_pass else let e = err_of(wrong_pass) {
+        assert(e.why == Why.InvalidCredentials);
+        return;
+    }
+    panic("wrong password succeeded");
+
+    let unknown_email = login(accs, "t1", "unknown@say.exchange", "ValidPass123!", meta);
+    guard let _ue = unknown_email else let e = err_of(unknown_email) {
+        assert(e.why == Why.InvalidCredentials);
+        return;
+    }
+    panic("unknown email succeeded");
+
+    let empty_pass = login(accs, "t1", "login@say.exchange", "", meta);
+    guard let _ep = empty_pass else let e = err_of(empty_pass) {
+        assert(e.why == Why.Invalid);
+        return;
+    }
+    panic("empty password succeeded");
+}

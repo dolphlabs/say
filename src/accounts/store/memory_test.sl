@@ -56,3 +56,26 @@ fn test_memory_refuses_a_duplicate_and_pages_in_order() {
     guard let rows = page else { panic("list failed"); }
     assert(len(rows) == 1 && rows[0].id == "2", inspect(len(rows)));
 }
+
+fn test_memory_confirm_age() {
+    let m = new_memory();
+    let _a = memory_insert(m, make_account("acc_1", "one@say.exchange"));
+
+    let pre = memory_find(m, "t", "acc_1");
+    guard let got_pre = pre else { panic("find failed"); }
+    guard let a_pre = got_pre else { panic("acc_1 missing"); }
+    assert(!domain.is_age_confirmed(a_pre));
+
+    let cr = memory_confirm_age(m, "t", "acc_1");
+    guard let c_ok = cr else { panic("confirm_age failed"); }
+    assert(c_ok);
+
+    let post = memory_find(m, "t", "acc_1");
+    guard let got_post = post else { panic("find failed"); }
+    guard let a_post = got_post else { panic("acc_1 missing"); }
+    assert(domain.is_age_confirmed(a_post));
+
+    let bad = memory_confirm_age(m, "t", "nonexistent");
+    guard let bad_ok = bad else { panic("confirm_age on nonexistent failed"); }
+    assert(!bad_ok);
+}

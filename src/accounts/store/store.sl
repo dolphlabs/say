@@ -27,7 +27,9 @@ fn wrap(s: Store) -> service.AccountStore[Store] {
         find_by_phone: store_find_by_phone,
         list: store_list,
         record_signup_audit: store_record_signup_audit,
-        verify_email: store_verify_email
+        record_login_audit: store_record_login_audit,
+        verify_email: store_verify_email,
+        confirm_age: store_confirm_age
     };
 }
 
@@ -73,8 +75,20 @@ fn store_record_signup_audit(s: Store, tenant_id: str, account_id: str, meta: se
     return memory_record_signup_audit(m, tenant_id, account_id, meta);
 }
 
+fn store_record_login_audit(s: Store, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+    if let p = s.postgres { return pg_record_login_audit(p, tenant_id, account_id, meta); }
+    guard let m = s.memory else { return err("no store"); }
+    return memory_record_login_audit(m, tenant_id, account_id, meta);
+}
+
 fn store_verify_email(s: Store, tenant_id: str, email: str) -> result[bool, str] {
     if let p = s.postgres { return pg_verify_email(p, tenant_id, email); }
     guard let m = s.memory else { return err("no store"); }
     return memory_verify_email(m, tenant_id, email);
+}
+
+fn store_confirm_age(s: Store, tenant_id: str, account_id: str) -> result[bool, str] {
+    if let p = s.postgres { return pg_confirm_age(p, tenant_id, account_id); }
+    guard let m = s.memory else { return err("no store"); }
+    return memory_confirm_age(m, tenant_id, account_id);
 }

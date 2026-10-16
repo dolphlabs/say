@@ -1,3 +1,4 @@
+import "strings";
 import "../domain" as domain;
 
 pub gc struct Accounts[C] {
@@ -11,7 +12,9 @@ pub enum Why {
     Unavailable,
     UsernameTaken,
     EmailTaken,
-    PhoneTaken
+    PhoneTaken,
+    InvalidCredentials,
+    Suspended
 }
 
 pub gc struct Failed {
@@ -196,4 +199,67 @@ pub fn verify_email[C](s: Accounts[C], tenant_id: str, email: str) -> result[dom
         return err(failed(Why.Unavailable, e));
     }
     return get_by_email(s, tenant_id, email);
+}
+
+pub fn confirm_age[C](s: Accounts[C], tenant_id: str, id: str) -> result[domain.Account, Failed] {
+    let cf = s.store.confirm_age;
+    let r = cf(s.store.context, tenant_id, id);
+    guard let _ok = r else let e = err_of(r) {
+        return err(failed(Why.Unavailable, e));
+    }
+    return get(s, tenant_id, id);
+}
+
+pub fn login[C](s: Accounts[C], tenant_id: str, email: str, raw_password: str, audit_meta: AuditMeta) -> result[domain.Account, Failed] {
+    let ps: [domain.Problem] = [];
+    let clean_email = strings.to_lower(strings.trim(email));
+    if len(clean_email) == 0 {
+        push(ps, domain.Problem { field: "email", reason: "must not be empty" });
+    }
+    if len(raw_password) == 0 {
+        push(ps, domain.Problem { field: "password", reason: "must not be empty" });
+    }
+    if len(ps) > 0 {
+        return err(Failed { why: Why.Invalid, problems: ps, detail: "validation failed" });
+    }
+
+    let find_e = s.store.find_by_email;
+    let r = find_e(s.store.context, tenant_id, clean_email);
+    guard let found_e = r else let e = err_of(r) {
+        return err(failed(Why.Unavailable, e));
+    }
+    let target_acc: opt[domain.Account] = found_e;
+    if let _found = target_acc {
+    } else {
+        let find_u = s.store.find_by_username;
+        let ru = find_u(s.store.context, tenant_id, clean_email);
+        guard let found_u = ru else let e = err_of(ru) {
+            return err(failed(Why.Unavailable, e));
+        }
+        target_acc = found_u;
+    }
+    guard let acc = target_acc else {
+        return err(failed(Why.InvalidCredentials, "invalid email or password"));
+    }
+
+    if !domain.is_active(acc) {
+        return err(failed(Why.Suspended, "account is suspended"));
+    }
+
+    guard let encoded = acc.password_hash else {
+        return err(failed(Why.InvalidCredentials, "invalid email or password"));
+    }
+
+    let verify_res = verify_password(raw_password, encoded);
+    guard let matched = verify_res else let _e = err_of(verify_res) {
+        return err(failed(Why.InvalidCredentials, "invalid email or password"));
+    }
+    if !matched {
+        return err(failed(Why.InvalidCredentials, "invalid email or password"));
+    }
+
+    let audit = s.store.record_login_audit;
+    let _ar = audit(s.store.context, tenant_id, acc.id, audit_meta);
+
+    return ok(acc);
 }

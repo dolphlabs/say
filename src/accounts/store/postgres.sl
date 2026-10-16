@@ -91,35 +91,70 @@ fn pg_list(p: Postgres, tenant_id: str, offset: int, limit: int) -> result[[doma
         [pg.arg_int(offset), pg.arg_int(limit)], deadline(p));
 }
 
-fn pg_record_signup_audit(p: Postgres, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+gc struct AuditJob {
+    pool: pg.Pool,
+    account_id: str,
+    action: str,
+    ip_address: opt[str],
+    user_agent: opt[str],
+    fingerprint: opt[str],
+    detail_json: str,
+    timeout: int
+}
+
+fn async_pg_record_audit(job: AuditJob) {
+    let dl = until_of(time.mono() + job.timeout);
     let ip_arg = pg.arg_null();
-    if let ip = meta.ip_address {
+    if let ip = job.ip_address {
         ip_arg = pg.arg_text(ip);
     }
     let ua_arg = pg.arg_null();
-    if let ua = meta.user_agent {
+    if let ua = job.user_agent {
         ua_arg = pg.arg_text(ua);
     }
     let fp_arg = pg.arg_null();
-    if let fp = meta.fingerprint {
+    if let fp = job.fingerprint {
         fp_arg = pg.arg_text(fp);
     }
 
-    let d_res = pg.pool_query(p.pool,
+    let _d = pg.pool_query(job.pool,
         "insert into account_devices (account_id, ip_address, user_agent, fingerprint) " +
         "values ($1, case when $2 ~ '^[0-9a-fA-F.:]+$' then $2::inet else null end, $3, $4)",
-        [pg.arg_text(account_id), ip_arg, ua_arg, fp_arg], deadline(p));
-    guard let _d = d_res else let e = err_of(d_res) {
-        return err(e);
-    }
+        [pg.arg_text(job.account_id), ip_arg, ua_arg, fp_arg], dl);
 
-    let a_res = pg.pool_query(p.pool,
+    let _a = pg.pool_query(job.pool,
         "insert into audit_events (actor_id, action, target_type, target_id, ip_address, user_agent, detail) " +
-        "values ($1, 'ACCOUNT_REGISTER', 'ACCOUNT', $1, case when $2 ~ '^[0-9a-fA-F.:]+$' then $2::inet else null end, $3, $4::jsonb)",
-        [pg.arg_text(account_id), ip_arg, ua_arg, pg.arg_text(meta.detail_json)], deadline(p));
-    guard let _a = a_res else let e = err_of(a_res) {
-        return err(e);
-    }
+        "values ($1, $2, 'ACCOUNT', $1, case when $3 ~ '^[0-9a-fA-F.:]+$' then $3::inet else null end, $4, $5::jsonb)",
+        [pg.arg_text(job.account_id), pg.arg_text(job.action), ip_arg, ua_arg, pg.arg_text(job.detail_json)], dl);
+}
+
+fn pg_record_signup_audit(p: Postgres, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+    let job = AuditJob {
+        pool: p.pool,
+        account_id: account_id,
+        action: "ACCOUNT_REGISTER",
+        ip_address: meta.ip_address,
+        user_agent: meta.user_agent,
+        fingerprint: meta.fingerprint,
+        detail_json: meta.detail_json,
+        timeout: p.timeout
+    };
+    spawn async_pg_record_audit(job);
+    return ok(true);
+}
+
+fn pg_record_login_audit(p: Postgres, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+    let job = AuditJob {
+        pool: p.pool,
+        account_id: account_id,
+        action: "ACCOUNT_LOGIN",
+        ip_address: meta.ip_address,
+        user_agent: meta.user_agent,
+        fingerprint: meta.fingerprint,
+        detail_json: meta.detail_json,
+        timeout: p.timeout
+    };
+    spawn async_pg_record_audit(job);
     return ok(true);
 }
 
@@ -127,6 +162,16 @@ fn pg_verify_email(p: Postgres, tenant_id: str, email: str) -> result[bool, str]
     let r = pg.pool_query(p.pool,
         "update accounts set email_verified_at = coalesce(email_verified_at, now()), verified_at = coalesce(verified_at, now()) where lower(email) = lower($1)",
         [pg.arg_text(email)], deadline(p));
+    guard let _rows = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(true);
+}
+
+fn pg_confirm_age(p: Postgres, tenant_id: str, account_id: str) -> result[bool, str] {
+    let r = pg.pool_query(p.pool,
+        "update accounts set age_confirmed_at = coalesce(age_confirmed_at, now()) where id = $1",
+        [pg.arg_text(account_id)], deadline(p));
     guard let _rows = r else let e = err_of(r) {
         return err(e);
     }

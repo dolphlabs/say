@@ -13,7 +13,9 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     let g = r.group("/v1/accounts");
     g.get("/check-username", check_username_availability);
     g.post("", register_account);
+    g.post("/login", login_handler);
     g.post("/verify-email", verify_email_handler);
+    g.post("/verify-age", verify_age_handler);
     g.get("", list_accounts);
     g.get("/:id", show_account);
     return 0;
@@ -125,6 +127,30 @@ fn register_account(c: zokor.Ctx[app.App]) -> http.Response {
     return zokor.created(account_json(n).render(), "/v1/accounts/" + n.id);
 }
 
+fn login_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[LoginDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let meta = extract_client_meta(c);
+    let lr = accounts.login(c.state.accounts, tenant(c), body.email, body.password, meta);
+    guard let acc = lr else let f = err_of(lr) {
+        return failure(c, f);
+    }
+    let resp = zokor.ok_json(account_json(acc).render());
+    let u_name = acc.username ?? "";
+    let em = acc.email ?? "";
+    let cookie_res = auth.issue_session_cookie(acc.id, em, u_name, acc.kind, c.state.settings.jwt_auth, c.state.settings.cookie_keys);
+    guard let cookie = cookie_res else {
+        return resp;
+    }
+    let with_cookie_res = zokor.set_cookie(resp, cookie);
+    guard let with_cookie = with_cookie_res else {
+        return resp;
+    }
+    return with_cookie;
+}
+
 fn verify_email_handler(c: zokor.Ctx[app.App]) -> http.Response {
     let dr: result[VerifyEmailDto, http.Response] = zokor.dto(c);
     guard let body = dr else let bad = err_of(dr) {
@@ -162,6 +188,18 @@ fn verify_email_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return resp;
     }
     return with_cookie;
+}
+
+fn verify_age_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    let sess = auth.current_session(c);
+    guard let claims = sess else {
+        return zokor.respond(c.errors, "unauthorized", c.request_id);
+    }
+    let res = accounts.confirm_age(c.state.accounts, tenant(c), claims.sub);
+    guard let acc = res else let f = err_of(res) {
+        return failure(c, f);
+    }
+    return zokor.ok_json(account_json(acc).render());
 }
 
 fn show_account(c: zokor.Ctx[app.App]) -> http.Response {

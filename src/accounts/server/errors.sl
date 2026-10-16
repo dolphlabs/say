@@ -10,6 +10,8 @@ fn register_errors(r: zokor.Registry) {
     zokor.register(r, "accounts.email_taken", 409, "email is already registered");
     zokor.register(r, "accounts.phone_taken", 409, "phone number is already registered");
     zokor.register(r, "accounts.invalid_verification_code", 400, "invalid or expired verification code");
+    zokor.register(r, "accounts.invalid_credentials", 401, "invalid email or password");
+    zokor.register(r, "accounts.suspended", 403, "account is suspended or locked");
 }
 
 fn failure(c: zokor.Ctx[app.App], f: accounts.Failed) -> http.Response {
@@ -22,6 +24,12 @@ fn failure(c: zokor.Ctx[app.App], f: accounts.Failed) -> http.Response {
     }
     if f.why == accounts.Why.NotFound {
         return zokor.respond(c.errors, "accounts.not_found", c.request_id);
+    }
+    if f.why == accounts.Why.InvalidCredentials {
+        return zokor.respond(c.errors, "accounts.invalid_credentials", c.request_id);
+    }
+    if f.why == accounts.Why.Suspended {
+        return zokor.respond(c.errors, "accounts.suspended", c.request_id);
     }
     if f.why == accounts.Why.UsernameTaken {
         return zokor.respond(c.errors, "accounts.username_taken", c.request_id);

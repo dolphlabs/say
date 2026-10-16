@@ -13,6 +13,11 @@ pub gc struct VerifyEmailDto {
     code: str
 }
 
+pub gc struct LoginDto {
+    email: str,
+    password: str
+}
+
 pub gc struct NewAccountDto {
     email: opt[str],
     auth_provider: opt[str]

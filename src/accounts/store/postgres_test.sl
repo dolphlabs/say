@@ -13,8 +13,6 @@ fn gen_uuid() -> str {
     return strings.slice(h, 0, 8) + "-" + strings.slice(h, 8, 12) + "-" + strings.slice(h, 12, 16) + "-" + strings.slice(h, 16, 20) + "-" + strings.slice(h, 20, 32);
 }
 
-// Against a real database when TEST_DATABASE_URL is set (the migrations
-// are applied first); skipped, and says so, when it is not.
 fn live() -> opt[Postgres] {
     let none_here: opt[Postgres] = none;
     let url = proc.getenv("TEST_DATABASE_URL") ?? "";
@@ -101,4 +99,37 @@ fn test_postgres_verify_email() {
     guard let row_v = got_v else { panic("account not found"); }
     assert(domain.is_email_verified(row_v));
     assert(domain.is_verified(row_v));
+}
+
+fn test_postgres_confirm_age() {
+    guard let p = live() else { return; }
+    let none_str: opt[str] = none;
+    let id = gen_uuid();
+    let sid = zokor.new_session_id();
+    let email = "pgage_" + sid + "@say.exchange";
+    let a = domain.Account {
+        id: id,
+        username: some("a_" + strings.slice(sid, 0, 8)),
+        email: some(email),
+        phone_number: none_str,
+        password_hash: none_str,
+        auth_provider: "LOCAL",
+        status: "ACTIVE",
+        kind: "USER",
+        beneficial_owner_group: none_str,
+        email_verified_at: none_str,
+        verified_at: none_str,
+        age_confirmed_at: none_str,
+        created_at: ""
+    };
+    let r = pg_insert(p, a);
+    guard let _ok = r else let e = err_of(r) { panic(e); }
+
+    let cr = pg_confirm_age(p, "tenant", id);
+    guard let _c_ok = cr else let e = err_of(cr) { panic(e); }
+
+    let row = pg_find(p, "tenant", id);
+    guard let got = row else let e = err_of(row) { panic(e); }
+    guard let acc = got else { panic("account not found"); }
+    assert(domain.is_age_confirmed(acc));
 }
