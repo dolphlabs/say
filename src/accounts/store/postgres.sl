@@ -122,3 +122,13 @@ fn pg_record_signup_audit(p: Postgres, tenant_id: str, account_id: str, meta: se
     }
     return ok(true);
 }
+
+fn pg_verify_email(p: Postgres, tenant_id: str, email: str) -> result[bool, str] {
+    let r = pg.pool_query(p.pool,
+        "update accounts set email_verified_at = coalesce(email_verified_at, now()), verified_at = coalesce(verified_at, now()) where lower(email) = lower($1)",
+        [pg.arg_text(email)], deadline(p));
+    guard let _rows = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(true);
+}

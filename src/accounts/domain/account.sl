@@ -25,6 +25,13 @@ pub fn is_active(a: Account) -> bool {
     return a.status == "ACTIVE";
 }
 
+pub fn is_email_verified(a: Account) -> bool {
+    if let _v = a.email_verified_at {
+        return true;
+    }
+    return false;
+}
+
 pub fn is_verified(a: Account) -> bool {
     if let _v = a.verified_at {
         return true;

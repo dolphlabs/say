@@ -48,6 +48,8 @@ fn test_register_account_flow() {
     assert(j.get("username").str_or("") == "trader_joe");
     assert(j.get("email").str_or("") == "joe@say.exchange");
     assert(j.get("phone_number").str_or("") == "+2349012345678");
+    assert(!j.get("email_verified").bool_or(true));
+    assert(!j.get("is_verified").bool_or(true));
     // Ensure password_hash is not returned in response
     assert(!j.has_key("password_hash"));
 
@@ -55,6 +57,7 @@ fn test_register_account_flow() {
     let show = r.serve(zokor.get_request("/v1/accounts/" + id).build());
     assert(zokor.resp_status(show) == 200, zokor.resp_text(show));
     assert(zokor.resp_json(show).get("username").str_or("") == "trader_joe");
+    assert(!zokor.resp_json(show).get("email_verified").bool_or(true));
 
     // Username now taken
     let check_taken = r.serve(zokor.get_request("/v1/accounts/check-username?username=trader_joe").build());
@@ -64,6 +67,45 @@ fn test_register_account_flow() {
     let dup_email_body = "{\"username\":\"other_user\",\"email\":\"joe@say.exchange\",\"password\":\"ValidPass123!\"}";
     let dup_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts").json_body(dup_email_body).build());
     assert(zokor.resp_status(dup_resp) == 409, zokor.resp_text(dup_resp));
+}
+
+fn test_verify_email_endpoint_flow() {
+    let r = router_under_test();
+    let reg_body = "{\"username\":\"verify_usr\",\"email\":\"verify@say.exchange\",\"password\":\"ValidPass123!\"}";
+    let reg_req = zokor.request(zokor.Method.POST, "/v1/accounts").json_body(reg_body).build();
+    let made = r.serve(reg_req);
+    assert(zokor.resp_status(made) == 201, zokor.resp_text(made));
+    let acc_id = zokor.resp_json(made).get("id").str_or("");
+
+    // Setup a known code in cache to verify directly
+    let _sc = app.save_verification_code(r.state, "8CHARCOD", "verify@say.exchange", 3600);
+
+    // Mismatched code fails
+    let bad_code_body = "{\"email\":\"verify@say.exchange\",\"code\":\"WRONGCOD\"}";
+    let bad_code_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-email").json_body(bad_code_body).build());
+    assert(zokor.resp_status(bad_code_resp) == 400, zokor.resp_text(bad_code_resp));
+
+    // Mismatched email fails
+    let bad_email_body = "{\"email\":\"wrong@say.exchange\",\"code\":\"8CHARCOD\"}";
+    let bad_email_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-email").json_body(bad_email_body).build());
+    assert(zokor.resp_status(bad_email_resp) == 400, zokor.resp_text(bad_email_resp));
+
+    // Valid code & matching email succeeds
+    let ok_body = "{\"email\":\"verify@say.exchange\",\"code\":\"8CHARCOD\"}";
+    let ok_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-email").json_body(ok_body).build());
+    assert(zokor.resp_status(ok_resp) == 200, zokor.resp_text(ok_resp));
+    let verified_json = zokor.resp_json(ok_resp);
+    assert(verified_json.get("email_verified").bool_or(false));
+    assert(verified_json.get("is_verified").bool_or(false));
+
+    // Replay with consumed code fails
+    let replay_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts/verify-email").json_body(ok_body).build());
+    assert(zokor.resp_status(replay_resp) == 400, zokor.resp_text(replay_resp));
+
+    // Verify account record is now verified when fetched
+    let show = r.serve(zokor.get_request("/v1/accounts/" + acc_id).build());
+    assert(zokor.resp_status(show) == 200, zokor.resp_text(show));
+    assert(zokor.resp_json(show).get("email_verified").bool_or(false));
 }
 
 fn test_register_with_weak_password_fails() {

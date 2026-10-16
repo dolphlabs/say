@@ -26,7 +26,8 @@ fn wrap(s: Store) -> service.AccountStore[Store] {
         find_by_email: store_find_by_email,
         find_by_phone: store_find_by_phone,
         list: store_list,
-        record_signup_audit: store_record_signup_audit
+        record_signup_audit: store_record_signup_audit,
+        verify_email: store_verify_email
     };
 }
 
@@ -70,4 +71,10 @@ fn store_record_signup_audit(s: Store, tenant_id: str, account_id: str, meta: se
     if let p = s.postgres { return pg_record_signup_audit(p, tenant_id, account_id, meta); }
     guard let m = s.memory else { return err("no store"); }
     return memory_record_signup_audit(m, tenant_id, account_id, meta);
+}
+
+fn store_verify_email(s: Store, tenant_id: str, email: str) -> result[bool, str] {
+    if let p = s.postgres { return pg_verify_email(p, tenant_id, email); }
+    guard let m = s.memory else { return err("no store"); }
+    return memory_verify_email(m, tenant_id, email);
 }

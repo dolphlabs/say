@@ -9,6 +9,7 @@ fn register_errors(r: zokor.Registry) {
     zokor.register(r, "accounts.username_taken", 409, "username is already taken");
     zokor.register(r, "accounts.email_taken", 409, "email is already registered");
     zokor.register(r, "accounts.phone_taken", 409, "phone number is already registered");
+    zokor.register(r, "accounts.invalid_verification_code", 400, "invalid or expired verification code");
 }
 
 fn failure(c: zokor.Ctx[app.App], f: accounts.Failed) -> http.Response {

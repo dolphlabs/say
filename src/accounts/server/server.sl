@@ -1,4 +1,6 @@
 // zokor:public
+import "crypto";
+import "encoding";
 import "http";
 import "strings";
 import "zokor";
@@ -10,6 +12,7 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     let g = r.group("/v1/accounts");
     g.get("/check-username", check_username_availability);
     g.post("", register_account);
+    g.post("/verify-email", verify_email_handler);
     g.get("", list_accounts);
     g.get("/:id", show_account);
     return 0;
@@ -95,6 +98,14 @@ fn check_username_availability(c: zokor.Ctx[app.App]) -> http.Response {
     return zokor.ok_json(username_available_json(u, true));
 }
 
+fn generate_verification_code() -> str {
+    let rb = crypto.rand(4);
+    guard let b = rb else {
+        return "1A2B3C4D";
+    }
+    return strings.to_upper(encoding.hex_encode(b));
+}
+
 fn register_account(c: zokor.Ctx[app.App]) -> http.Response {
     let dr: result[RegisterAccountDto, http.Response] = zokor.dto(c);
     guard let body = dr else let bad = err_of(dr) {
@@ -105,7 +116,41 @@ fn register_account(c: zokor.Ctx[app.App]) -> http.Response {
     guard let n = made else let f = err_of(made) {
         return failure(c, f);
     }
+
+    let code = generate_verification_code();
+    let _saved = app.save_verification_code(c.state, code, strings.to_lower(body.email), 3600);
+    app.send_verification_email(c.state, body.email, body.username, code);
+
     return zokor.created(account_json(n).render(), "/v1/accounts/" + n.id);
+}
+
+fn verify_email_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[VerifyEmailDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let code = strings.to_upper(strings.trim(body.code));
+    let email_input = strings.to_lower(strings.trim(body.email));
+    if len(code) == 0 || len(email_input) == 0 {
+        return zokor.respond(c.errors, "accounts.invalid_verification_code", c.request_id);
+    }
+    let gr = app.get_verification_code(c.state, code);
+    guard let opt_val = gr else {
+        return zokor.respond(c.errors, "accounts.unavailable", c.request_id);
+    }
+    guard let stored_email = opt_val else {
+        return zokor.respond(c.errors, "accounts.invalid_verification_code", c.request_id);
+    }
+    if strings.to_lower(stored_email) != email_input {
+        return zokor.respond(c.errors, "accounts.invalid_verification_code", c.request_id);
+    }
+
+    let _d = app.delete_verification_code(c.state, code);
+    let vr = accounts.verify_email(c.state.accounts, tenant(c), email_input);
+    guard let acc = vr else let f = err_of(vr) {
+        return failure(c, f);
+    }
+    return zokor.ok_json(account_json(acc).render());
 }
 
 fn show_account(c: zokor.Ctx[app.App]) -> http.Response {

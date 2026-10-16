@@ -122,3 +122,34 @@ fn memory_list(m: Memory, tenant_id: str, offset: int, limit: int) -> result[[do
 fn memory_record_signup_audit(m: Memory, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
     return ok(true);
 }
+
+fn memory_verify_email(m: Memory, tenant_id: str, email: str) -> result[bool, str] {
+    mutex_lock(m.lock);
+    let key = strings.to_lower(email);
+    if has(m.by_email, key) {
+        let id = m.by_email[key];
+        if has(m.rows, id) {
+            let a = m.rows[id];
+            let updated = domain.Account {
+                id: a.id,
+                username: a.username,
+                email: a.email,
+                phone_number: a.phone_number,
+                password_hash: a.password_hash,
+                auth_provider: a.auth_provider,
+                status: a.status,
+                kind: a.kind,
+                beneficial_owner_group: a.beneficial_owner_group,
+                email_verified_at: some("2026-10-16T00:00:00Z"),
+                verified_at: some("2026-10-16T00:00:00Z"),
+                age_confirmed_at: a.age_confirmed_at,
+                created_at: a.created_at
+            };
+            m.rows[id] = updated;
+            mutex_unlock(m.lock);
+            return ok(true);
+        }
+    }
+    mutex_unlock(m.lock);
+    return ok(false);
+}

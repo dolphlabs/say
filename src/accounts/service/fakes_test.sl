@@ -87,6 +87,36 @@ fn fake_record_signup_audit(f: FakeStore, tenant_id: str, account_id: str, meta:
     return ok(true);
 }
 
+fn fake_verify_email(f: FakeStore, tenant_id: str, email: str) -> result[bool, str] {
+    push(f.calls, "verify_email " + email);
+    if len(f.failure) > 0 { return err(f.failure); }
+    let target = strings.to_lower(email);
+    for id, a in f.rows {
+        if let em = a.email {
+            if strings.to_lower(em) == target {
+                let updated = domain.Account {
+                    id: a.id,
+                    username: a.username,
+                    email: a.email,
+                    phone_number: a.phone_number,
+                    password_hash: a.password_hash,
+                    auth_provider: a.auth_provider,
+                    status: a.status,
+                    kind: a.kind,
+                    beneficial_owner_group: a.beneficial_owner_group,
+                    email_verified_at: some("2026-10-16T00:00:00Z"),
+                    verified_at: some("2026-10-16T00:00:00Z"),
+                    age_confirmed_at: a.age_confirmed_at,
+                    created_at: a.created_at
+                };
+                f.rows[id] = updated;
+                return ok(true);
+            }
+        }
+    }
+    return ok(false);
+}
+
 fn fixed_id() -> str {
     return "acc_1";
 }
@@ -100,6 +130,7 @@ fn fake_accounts(f: FakeStore) -> Accounts[FakeStore] {
         find_by_email: fake_find_by_email,
         find_by_phone: fake_find_by_phone,
         list: fake_list,
-        record_signup_audit: fake_record_signup_audit
+        record_signup_audit: fake_record_signup_audit,
+        verify_email: fake_verify_email
     }, fixed_id);
 }

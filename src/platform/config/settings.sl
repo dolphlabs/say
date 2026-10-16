@@ -15,7 +15,9 @@ pub gc struct Settings {
     min_order_notional: int,
     season_grant_amount: int,
     dispute_window_seconds: int,
-    timezone: str
+    timezone: str,
+    sendbyte_api_key: str,
+    email_from: str
 }
 
 pub fn settings_from(cfg: zokor.Config) -> Settings {
@@ -36,6 +38,8 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
         min_order_notional: zokor.int_or(cfg, "MIN_ORDER_NOTIONAL", 2),
         season_grant_amount: zokor.int_or(cfg, "SEASON_GRANT_AMOUNT", 1000),
         dispute_window_seconds: zokor.int_or(cfg, "DISPUTE_WINDOW_SECONDS", 1800),
-        timezone: zokor.str_or(cfg, "TIMEZONE", "Africa/Lagos")
+        timezone: zokor.str_or(cfg, "TIMEZONE", "Africa/Lagos"),
+        sendbyte_api_key: zokor.str_or(cfg, "SEND_BYTE_KEY", zokor.str_or(cfg, "SENDBYTE_API_KEY", "")),
+        email_from: zokor.str_or(cfg, "EMAIL_FROM", "Say Exchange <verify@say.exchange>")
     };
 }

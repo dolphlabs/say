@@ -188,3 +188,12 @@ pub fn list[C](s: Accounts[C], tenant_id: str, offset: int, limit: int) -> resul
     }
     return ok(rows);
 }
+
+pub fn verify_email[C](s: Accounts[C], tenant_id: str, email: str) -> result[domain.Account, Failed] {
+    let vf = s.store.verify_email;
+    let r = vf(s.store.context, tenant_id, email);
+    guard let _ok = r else let e = err_of(r) {
+        return err(failed(Why.Unavailable, e));
+    }
+    return get_by_email(s, tenant_id, email);
+}

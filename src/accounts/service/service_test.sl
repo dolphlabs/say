@@ -119,3 +119,31 @@ fn test_a_failing_store_is_unavailable_with_its_detail_kept() {
     }
     panic("a failing store succeeded");
 }
+
+fn test_verify_email_flow() {
+    let f = fake_store();
+    let accs = fake_accounts(f);
+    let none_str: opt[str] = none;
+    let meta = AuditMeta {
+        ip_address: none_str,
+        user_agent: none_str,
+        fingerprint: none_str,
+        detail_json: "{}"
+    };
+    let made = create_with_password(accs, "t1", "joe_trader", "joe@say.exchange", "ValidPass123!", none_str, meta);
+    guard let a = made else { panic("create_with_password failed"); }
+    assert(!domain.is_email_verified(a));
+    assert(!domain.is_verified(a));
+
+    let ver = verify_email(accs, "t1", "joe@say.exchange");
+    guard let v = ver else { panic("verify_email failed"); }
+    assert(domain.is_email_verified(v));
+    assert(domain.is_verified(v));
+
+    let bad = verify_email(accs, "t1", "nonexistent@say.exchange");
+    guard let _b = bad else let e = err_of(bad) {
+        assert(e.why == Why.NotFound);
+        return;
+    }
+    panic("verifying nonexistent email should fail");
+}

@@ -8,6 +8,11 @@ pub gc struct RegisterAccountDto {
     phone_number: opt[str]
 }
 
+pub gc struct VerifyEmailDto {
+    email: str,
+    code: str
+}
+
 pub gc struct NewAccountDto {
     email: opt[str],
     auth_provider: opt[str]
@@ -38,6 +43,7 @@ fn account_json(n: domain.Account) -> zokor.Json {
     if let bg = n.beneficial_owner_group {
         j.set_str("beneficial_owner_group", bg);
     }
+    j.set_bool("email_verified", domain.is_email_verified(n));
     j.set_bool("is_verified", domain.is_verified(n));
     j.set_bool("is_age_confirmed", domain.is_age_confirmed(n));
     j.set_bool("is_eligible_for_grant", domain.is_eligible_for_grant(n));
