@@ -1,17 +1,30 @@
+import "strings";
 import "../domain" as domain;
+import "../service" as service;
 
 pub gc struct Memory {
     lock: mutex,
     rows: map[str]domain.Account,
+    by_username: map[str]str,
     by_email: map[str]str,
+    by_phone: map[str]str,
     order: [str]
 }
 
 fn new_memory() -> Memory {
     let rows: map[str]domain.Account = {};
+    let by_username: map[str]str = {};
     let by_email: map[str]str = {};
+    let by_phone: map[str]str = {};
     let order: [str] = [];
-    return Memory { lock: make_mutex(), rows: rows, by_email: by_email, order: order };
+    return Memory {
+        lock: make_mutex(),
+        rows: rows,
+        by_username: by_username,
+        by_email: by_email,
+        by_phone: by_phone,
+        order: order
+    };
 }
 
 fn memory_insert(m: Memory, n: domain.Account) -> result[bool, str] {
@@ -20,8 +33,14 @@ fn memory_insert(m: Memory, n: domain.Account) -> result[bool, str] {
     if fresh {
         m.rows[n.id] = n;
         push(m.order, n.id);
+        if let u = n.username {
+            m.by_username[strings.to_lower(u)] = n.id;
+        }
         if let em = n.email {
-            m.by_email[em] = n.id;
+            m.by_email[strings.to_lower(em)] = n.id;
+        }
+        if let ph = n.phone_number {
+            m.by_phone[ph] = n.id;
         }
     }
     mutex_unlock(m.lock);
@@ -41,11 +60,39 @@ fn memory_find(m: Memory, tenant_id: str, id: str) -> result[opt[domain.Account]
     return ok(found);
 }
 
+fn memory_find_by_username(m: Memory, tenant_id: str, username: str) -> result[opt[domain.Account], str] {
+    mutex_lock(m.lock);
+    let found: opt[domain.Account] = none;
+    let key = strings.to_lower(username);
+    if has(m.by_username, key) {
+        let id = m.by_username[key];
+        if has(m.rows, id) {
+            found = some(m.rows[id]);
+        }
+    }
+    mutex_unlock(m.lock);
+    return ok(found);
+}
+
 fn memory_find_by_email(m: Memory, tenant_id: str, email: str) -> result[opt[domain.Account], str] {
     mutex_lock(m.lock);
     let found: opt[domain.Account] = none;
-    if has(m.by_email, email) {
-        let id = m.by_email[email];
+    let key = strings.to_lower(email);
+    if has(m.by_email, key) {
+        let id = m.by_email[key];
+        if has(m.rows, id) {
+            found = some(m.rows[id]);
+        }
+    }
+    mutex_unlock(m.lock);
+    return ok(found);
+}
+
+fn memory_find_by_phone(m: Memory, tenant_id: str, phone: str) -> result[opt[domain.Account], str] {
+    mutex_lock(m.lock);
+    let found: opt[domain.Account] = none;
+    if has(m.by_phone, phone) {
+        let id = m.by_phone[phone];
         if has(m.rows, id) {
             found = some(m.rows[id]);
         }
@@ -70,4 +117,8 @@ fn memory_list(m: Memory, tenant_id: str, offset: int, limit: int) -> result[[do
     }
     mutex_unlock(m.lock);
     return ok(out);
+}
+
+fn memory_record_signup_audit(m: Memory, tenant_id: str, account_id: str, meta: service.AuditMeta) -> result[bool, str] {
+    return ok(true);
 }

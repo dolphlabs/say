@@ -4,7 +4,9 @@ fn make_account(id: str, email: str) -> domain.Account {
     let none_str: opt[str] = none;
     return domain.Account {
         id: id,
+        username: some("user_" + id),
         email: some(email),
+        phone_number: some("+234800000000" + id),
         password_hash: none_str,
         auth_provider: "LOCAL",
         status: "ACTIVE",
@@ -31,6 +33,16 @@ fn test_memory_insert_and_find_by_id_and_email() {
     guard let got_em = by_em else { panic("find_by_email failed"); }
     guard let n2 = got_em else { panic("two@say.exchange is missing"); }
     assert(n2.id == "acc_2");
+
+    let by_u = memory_find_by_username(m, "tenant_dummy", "user_acc_1");
+    guard let got_u = by_u else { panic("find_by_username failed"); }
+    guard let nu = got_u else { panic("user_acc_1 is missing"); }
+    assert(nu.id == "acc_1");
+
+    let by_ph = memory_find_by_phone(m, "tenant_dummy", "+234800000000acc_2");
+    guard let got_ph = by_ph else { panic("find_by_phone failed"); }
+    guard let nph = got_ph else { panic("phone is missing"); }
+    assert(nph.id == "acc_2");
 }
 
 fn test_memory_refuses_a_duplicate_and_pages_in_order() {

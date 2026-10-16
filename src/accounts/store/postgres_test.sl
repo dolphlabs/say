@@ -30,7 +30,9 @@ fn test_postgres_accounts_insert_and_find() {
     let email = "pgtest_" + zokor.new_session_id() + "@say.exchange";
     let a = domain.Account {
         id: id,
+        username: some("pg_user_1"),
         email: some(email),
+        phone_number: some("+2348000000001"),
         password_hash: none_str,
         auth_provider: "LOCAL",
         status: "ACTIVE",

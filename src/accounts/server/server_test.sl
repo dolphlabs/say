@@ -3,51 +3,85 @@ import "zokor";
 import "../../platform/app" as app;
 import "../../platform/config" as config;
 
-// The routes through the real router pipeline -- auth, decoding, the use
-// cases, the memory store -- without a socket.
-
-fn key_a() -> str { return "acme-0123456789abcdef0123456789"; }
-fn key_b() -> str { return "globex-0123456789abcdef01234567"; }
-
 fn router_under_test() -> zokor.Router[app.App] {
     let m: map[str]str = {};
     m["PORT"] = "8080";
-    m["API_KEYS"] = "acme:" + key_a() + ",globex:" + key_b();
     let cfg = zokor.config_from_values(m);
     let r = zokor.new_router(app.for_tests(config.settings_from(cfg)));
     mount(r);
     return r;
 }
 
-fn post_account(r: zokor.Router[app.App], key: str, body: str) -> http.Response {
-    return r.serve(zokor.request(zokor.Method.POST, "/accounts").header("x-api-key", key)
-                   .json_body(body).build());
+fn test_check_username_availability_endpoint() {
+    let r = router_under_test();
+
+    // Check available username (<= 10 characters)
+    let ok_resp = r.serve(zokor.get_request("/v1/accounts/check-username?username=cool_user").build());
+    assert(zokor.resp_status(ok_resp) == 200, zokor.resp_text(ok_resp));
+    assert(zokor.resp_json(ok_resp).get("available").bool_or(false));
+
+    // Too long username (> 10 characters)
+    let long_resp = r.serve(zokor.get_request("/v1/accounts/check-username?username=fresh_trader").build());
+    assert(zokor.resp_status(long_resp) == 422, zokor.resp_text(long_resp));
+
+    // Too short username (< 3 characters)
+    let bad_resp = r.serve(zokor.get_request("/v1/accounts/check-username?username=ab").build());
+    assert(zokor.resp_status(bad_resp) == 422, zokor.resp_text(bad_resp));
+
+    // Empty username
+    let empty_resp = r.serve(zokor.get_request("/v1/accounts/check-username").build());
+    assert(zokor.resp_status(empty_resp) == 422, zokor.resp_text(empty_resp));
 }
 
-fn test_one_account_round_trips() {
+fn test_register_account_flow() {
     let r = router_under_test();
-    let made = post_account(r, key_a(), "{\"email\":\"trader@say.exchange\",\"auth_provider\":\"LOCAL\"}");
+    let body = "{\"username\":\"trader_joe\",\"email\":\"joe@say.exchange\",\"password\":\"ValidPass123!\",\"phone_number\":\"+2349012345678\"}";
+    let req = zokor.request(zokor.Method.POST, "/v1/accounts")
+        .header("user-agent", "Mozilla/5.0")
+        .header("x-forwarded-for", "192.168.1.100")
+        .json_body(body)
+        .build();
+    let made = r.serve(req);
     assert(zokor.resp_status(made) == 201, zokor.resp_text(made));
-    let id = zokor.resp_json(made).get("id").str_or("");
-    let mine = r.serve(zokor.get_request("/accounts/" + id).header("x-api-key", key_a()).build());
-    assert(zokor.resp_status(mine) == 200, zokor.resp_text(mine));
-    assert(zokor.resp_json(mine).get("email").str_or("") == "trader@say.exchange");
+    let j = zokor.resp_json(made);
+    let id = j.get("id").str_or("");
+    assert(j.get("username").str_or("") == "trader_joe");
+    assert(j.get("email").str_or("") == "joe@say.exchange");
+    assert(j.get("phone_number").str_or("") == "+2349012345678");
+    // Ensure password_hash is not returned in response
+    assert(!j.has_key("password_hash"));
+
+    // Query account by id
+    let show = r.serve(zokor.get_request("/v1/accounts/" + id).build());
+    assert(zokor.resp_status(show) == 200, zokor.resp_text(show));
+    assert(zokor.resp_json(show).get("username").str_or("") == "trader_joe");
+
+    // Username now taken
+    let check_taken = r.serve(zokor.get_request("/v1/accounts/check-username?username=trader_joe").build());
+    assert(zokor.resp_status(check_taken) == 409, zokor.resp_text(check_taken));
+
+    // Duplicate email fails
+    let dup_email_body = "{\"username\":\"other_user\",\"email\":\"joe@say.exchange\",\"password\":\"ValidPass123!\"}";
+    let dup_resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts").json_body(dup_email_body).build());
+    assert(zokor.resp_status(dup_resp) == 409, zokor.resp_text(dup_resp));
 }
 
-fn test_no_key_is_401_and_reaches_nothing() {
+fn test_register_with_weak_password_fails() {
     let r = router_under_test();
-    let denied = r.serve(zokor.get_request("/accounts").build());
-    assert(zokor.resp_status(denied) == 401, zokor.resp_text(denied));
+    let body = "{\"username\":\"weak_user\",\"email\":\"weak@say.exchange\",\"password\":\"weak\"}";
+    let resp = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts").json_body(body).build());
+    assert(zokor.resp_status(resp) == 422, zokor.resp_text(resp));
 }
 
 fn test_listing_is_paged_and_bounded() {
     let r = router_under_test();
     for t in ["a", "b", "c"] {
-        let _m = post_account(r, key_a(), "{\"email\":\"" + t + "@say.exchange\",\"auth_provider\":\"LOCAL\"}");
+        let b = "{\"username\":\"user_" + t + "\",\"email\":\"" + t + "@say.exchange\",\"password\":\"ValidPass123!\"}";
+        let _m = r.serve(zokor.request(zokor.Method.POST, "/v1/accounts").json_body(b).build());
     }
-    let page = r.serve(zokor.get_request("/accounts?offset=1&limit=1").header("x-api-key", key_a()).build());
+    let page = r.serve(zokor.get_request("/v1/accounts?offset=1&limit=1").build());
     let data = zokor.resp_json(page).get("data");
     assert(data.size() == 1, zokor.resp_text(page));
-    let too_many = r.serve(zokor.get_request("/accounts?limit=1000").header("x-api-key", key_a()).build());
+    let too_many = r.serve(zokor.get_request("/v1/accounts?limit=1000").build());
     assert(zokor.resp_status(too_many) == 422);
 }

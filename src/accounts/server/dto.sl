@@ -1,9 +1,23 @@
 import "zokor";
 import "../domain" as domain;
 
-gc struct NewAccountDto {
+pub gc struct RegisterAccountDto {
+    username: str,
+    email: str,
+    password: str,
+    phone_number: opt[str]
+}
+
+pub gc struct NewAccountDto {
     email: opt[str],
     auth_provider: opt[str]
+}
+
+fn username_available_json(username: str, available: bool) -> str {
+    return zokor.jobj()
+        .set_str("username", username)
+        .set_bool("available", available)
+        .render();
 }
 
 fn account_json(n: domain.Account) -> zokor.Json {
@@ -12,8 +26,14 @@ fn account_json(n: domain.Account) -> zokor.Json {
         .set_str("auth_provider", n.auth_provider)
         .set_str("status", n.status)
         .set_str("kind", n.kind);
+    if let u = n.username {
+        j.set_str("username", u);
+    }
     if let em = n.email {
         j.set_str("email", em);
+    }
+    if let ph = n.phone_number {
+        j.set_str("phone_number", ph);
     }
     if let bg = n.beneficial_owner_group {
         j.set_str("beneficial_owner_group", bg);

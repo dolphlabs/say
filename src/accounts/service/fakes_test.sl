@@ -1,3 +1,4 @@
+import "strings";
 import "../domain" as domain;
 
 gc struct FakeStore {
@@ -27,13 +28,43 @@ fn fake_find(f: FakeStore, tenant_id: str, id: str) -> result[opt[domain.Account
     return ok(some(f.rows[id]));
 }
 
+fn fake_find_by_username(f: FakeStore, tenant_id: str, username: str) -> result[opt[domain.Account], str] {
+    push(f.calls, "find_by_username " + username);
+    if len(f.failure) > 0 { return err(f.failure); }
+    let absent: opt[domain.Account] = none;
+    let target = strings.to_lower(username);
+    for _id, a in f.rows {
+        if let u = a.username {
+            if strings.to_lower(u) == target {
+                return ok(some(a));
+            }
+        }
+    }
+    return ok(absent);
+}
+
 fn fake_find_by_email(f: FakeStore, tenant_id: str, email: str) -> result[opt[domain.Account], str] {
     push(f.calls, "find_by_email " + email);
     if len(f.failure) > 0 { return err(f.failure); }
     let absent: opt[domain.Account] = none;
+    let target = strings.to_lower(email);
     for _id, a in f.rows {
         if let em = a.email {
-            if em == email {
+            if strings.to_lower(em) == target {
+                return ok(some(a));
+            }
+        }
+    }
+    return ok(absent);
+}
+
+fn fake_find_by_phone(f: FakeStore, tenant_id: str, phone: str) -> result[opt[domain.Account], str] {
+    push(f.calls, "find_by_phone " + phone);
+    if len(f.failure) > 0 { return err(f.failure); }
+    let absent: opt[domain.Account] = none;
+    for _id, a in f.rows {
+        if let ph = a.phone_number {
+            if ph == phone {
                 return ok(some(a));
             }
         }
@@ -51,6 +82,11 @@ fn fake_list(f: FakeStore, tenant_id: str, offset: int, limit: int) -> result[[d
     return ok(out);
 }
 
+fn fake_record_signup_audit(f: FakeStore, tenant_id: str, account_id: str, meta: AuditMeta) -> result[bool, str] {
+    push(f.calls, "audit " + account_id);
+    return ok(true);
+}
+
 fn fixed_id() -> str {
     return "acc_1";
 }
@@ -60,7 +96,10 @@ fn fake_accounts(f: FakeStore) -> Accounts[FakeStore] {
         context: f,
         insert: fake_insert,
         find: fake_find,
+        find_by_username: fake_find_by_username,
         find_by_email: fake_find_by_email,
-        list: fake_list
+        find_by_phone: fake_find_by_phone,
+        list: fake_list,
+        record_signup_audit: fake_record_signup_audit
     }, fixed_id);
 }
