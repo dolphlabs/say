@@ -34,3 +34,13 @@ pub fn ping(d: Db, deadline: until) -> result[int, str] {
     }
     return ok(0);
 }
+
+// A statement with no parameters and no rows wanted: setup and seeds.
+pub fn run(d: Db, sql: str, deadline: until) -> result[int, str] {
+    let none_args: [pg.Arg] = [];
+    let r = pg.pool_query(d.pool, sql, none_args, deadline);
+    guard let _rows = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(0);
+}

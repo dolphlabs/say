@@ -2,4 +2,4 @@ name say
 version 0.1.0
 
 pkg zokor git https://github.com/dolphlabs/zokor tag v0.2.0 dir zokor
-pkg jwt git https://github.com/dolphlabs/jwt.git tag v0.1.0 dir src/jwt
+pkg argon git https://github.com/dolphlabs/argon.git tag v0.1.0 dir src/argon

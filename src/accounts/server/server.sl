@@ -1,244 +1,316 @@
 // zokor:public
-import "crypto";
 import "encoding";
 import "http";
-import "strings";
-import "time";
+import "timez";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/auth" as auth;
+import "../domain" as domain;
 import "../service" as accounts;
 
+// /v1/auth/* is public by design (it is how a caller gets a session);
+// /v1/me/* and logout-others sit behind auth.require_session.
 pub fn mount(r: zokor.Router[app.App]) -> int {
     register_errors(r.errors);
-    let g = r.group("/v1/accounts");
-    g.get("/check-username", check_username_availability);
-    g.post("", register_account);
-    g.post("/login", login_handler);
-    g.post("/logout", logout_handler);
-    g.post("/verify-email", verify_email_handler);
-    g.post("/verify-age", verify_age_handler);
-    g.get("", list_accounts);
-    g.get("/:id", show_account);
+    let g = r.group("/v1/auth");
+    g.get("/username/:name", check_username);
+    g.post("/username/hold", hold_username);
+    g.post("/signup", signup);
+    g.post("/otp/resend", resend);
+    g.post("/otp/verify", verify);
+    g.post("/login", login);
+    g.get("/google/start", google_start);
+    g.get("/google/callback", google_callback);
+    g.post("/google/complete", google_complete);
+    g.post("/logout", logout);
+    g.post("/password/forgot", forgot);
+    g.post("/password/reset", reset);
+    let signed = r.group("/v1/auth");
+    signed.before(auth.require_session);
+    signed.post("/logout-others", logout_others);
+    let me = r.group("/v1/me");
+    me.before(auth.require_session);
+    me.get("", show_me);
+    me.post("/password", change_password);
+    me.delete("/google", unlink_google);
+    me.delete("", delete_me);
     return 0;
 }
 
-fn tenant(c: zokor.Ctx[app.App]) -> str {
-    let t = c.local("tenant_id");
-    if t != "" {
-        return t;
-    }
-    let h = c.header("x-tenant-id");
-    if h != "" {
-        return h;
-    }
-    return "default";
-}
-
-fn extract_client_meta(c: zokor.Ctx[app.App]) -> accounts.AuditMeta {
-    let xff = c.header("x-forwarded-for");
-    let xri = c.header("x-real-ip");
-    let ip = "";
-    if xff != "" {
-        let ips = strings.split(xff, ",");
-        if len(ips) > 0 {
-            ip = strings.trim(ips[0]);
-        }
-    } else if xri != "" {
-        ip = strings.trim(xri);
-    }
-
-    let ua = c.header("user-agent");
-    let lang = c.header("accept-language");
-    let sec_ua = c.header("sec-ch-ua");
-    let sec_plat = c.header("sec-ch-ua-platform");
-    let sec_mob = c.header("sec-ch-ua-mobile");
-    let ref = c.header("referer");
-    let orig = c.header("origin");
-    let fp = c.header("x-device-fingerprint");
-
-    let detail = zokor.jobj()
-        .set_str("ip", ip)
-        .set_str("user_agent", ua)
-        .set_str("accept_language", lang)
-        .set_str("sec_ch_ua", sec_ua)
-        .set_str("sec_ch_ua_platform", sec_plat)
-        .set_str("sec_ch_ua_mobile", sec_mob)
-        .set_str("referer", ref)
-        .set_str("origin", orig)
-        .set_str("signup_channel", "WEB")
+fn signed_in(c: zokor.Ctx[app.App], status: i32, s: accounts.SignedIn) -> http.Response {
+    let body = zokor.jobj()
+        .set("user", user_json(s.account, changeable_at(s.account, s.grant)))
+        .set("grant", grant_json(s.grant))
         .render();
-
-    let ip_opt: opt[str] = none;
-    if ip != "" {
-        ip_opt = some(ip);
+    let resp = zokor.no_store(zokor.json_response(status, body));
+    let cr = auth.with_session(resp, s.session_token);
+    guard let with_cookie = cr else let e = err_of(cr) {
+        c.state.settings.server.logger.error("accounts", "session cookie refused: " + e);
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
-    let ua_opt: opt[str] = none;
-    if ua != "" {
-        ua_opt = some(ua);
-    }
-    let fp_opt: opt[str] = none;
-    if fp != "" {
-        fp_opt = some(fp);
-    }
-
-    return accounts.AuditMeta {
-        ip_address: ip_opt,
-        user_agent: ua_opt,
-        fingerprint: fp_opt,
-        detail_json: detail
-    };
+    return with_cookie;
 }
 
-fn check_username_availability(c: zokor.Ctx[app.App]) -> http.Response {
-    let u = c.query("username");
-    if u == "" {
-        return zokor.respond_fields(c.errors, "validation_failed",
-            [zokor.field("username", "must not be empty")], c.request_id);
-    }
-    let r = accounts.check_username(c.state.accounts, tenant(c), u);
-    guard let _avail = r else let f = err_of(r) {
+fn check_username(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.check_username(c.state.accounts, c.param("name"), c.client_ip);
+    guard let u = r else let f = err_of(r) {
         return failure(c, f);
     }
-    return zokor.ok_json(username_available_json(u, true));
-}
-
-fn generate_verification_code() -> str {
-    let rb = crypto.rand(4);
-    guard let b = rb else {
-        return "1A2B3C4D";
+    let sugg = zokor.jarr();
+    for s in u.suggestions {
+        sugg.add_str(s);
     }
-    return strings.to_upper(encoding.hex_encode(b));
+    let body = zokor.jobj().set_str("username", u.username).set_bool("available", u.available);
+    if len(u.reason) > 0 {
+        body.set_str("reason", u.reason);
+    }
+    return zokor.ok_json(body.set("suggestions", sugg).render());
 }
 
-fn register_account(c: zokor.Ctx[app.App]) -> http.Response {
-    let dr: result[RegisterAccountDto, http.Response] = zokor.dto(c);
+fn hold_username(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[HoldDto, http.Response] = zokor.dto(c);
     guard let body = dr else let bad = err_of(dr) {
         return bad;
     }
-    let meta = extract_client_meta(c);
-    let made = accounts.create_with_password(c.state.accounts, tenant(c), body.username, body.email, body.password, body.phone_number, meta);
-    guard let n = made else let f = err_of(made) {
+    let r = accounts.hold_username(c.state.accounts, body.username, c.client_ip);
+    guard let h = r else let f = err_of(r) {
         return failure(c, f);
     }
-
-    let code = generate_verification_code();
-    let _saved = app.save_verification_code(c.state, code, strings.to_lower(body.email), 3600);
-    app.send_verification_email(c.state, body.email, body.username, code);
-
-    return zokor.created(account_json(n).render(), "/v1/accounts/" + n.id);
+    return zokor.ok_json(zokor.jobj()
+        .set_str("username", h.username)
+        .set_str("hold_id", h.hold_id)
+        .set_str("expires_at", h.expires_at.rfc3339())
+        .render());
 }
 
-fn login_handler(c: zokor.Ctx[app.App]) -> http.Response {
+fn signup(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[SignupDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let r = accounts.signup(c.state.accounts, c.state.mailer, body.username, body.hold_id, body.email,
+                            body.password, meta(c));
+    guard let s = r else let fs = err_of(r) {
+        return failures(c, fs);
+    }
+    return zokor.no_store(zokor.json_response(201, zokor.jobj()
+        .set_str("signup_token", s.signup_token)
+        .set_str("email_masked", s.email_masked)
+        .set_str("resend_available_at", s.resend_available_at.rfc3339())
+        .render()));
+}
+
+fn resend(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[ResendDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let r = accounts.resend(c.state.accounts, c.state.mailer, body.signup_token ?? "", body.email ?? "",
+                            body.purpose, meta(c));
+    guard let q = r else let f = err_of(r) {
+        return failure(c, f);
+    }
+    return zokor.accepted(zokor.jobj().set_str("resend_available_at", q.resend_available_at.rfc3339()).render());
+}
+
+fn verify(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[VerifyDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let r = accounts.verify_signup(c.state.accounts, body.signup_token, body.code, meta(c));
+    guard let s = r else let f = err_of(r) {
+        return failure(c, f);
+    }
+    return signed_in(c, 200, s);
+}
+
+fn login(c: zokor.Ctx[app.App]) -> http.Response {
     let dr: result[LoginDto, http.Response] = zokor.dto(c);
     guard let body = dr else let bad = err_of(dr) {
         return bad;
     }
-    let meta = extract_client_meta(c);
-    let lr = accounts.login(c.state.accounts, tenant(c), body.email, body.password, meta);
-    guard let acc = lr else let f = err_of(lr) {
+    let r = accounts.login(c.state.accounts, body.email, body.password, meta(c));
+    guard let s = r else let f = err_of(r) {
         return failure(c, f);
     }
-    let resp = zokor.ok_json(account_json(acc).render());
-    let u_name = acc.username ?? "";
-    let em = acc.email ?? "";
-    let cookie_res = auth.issue_session_cookie(acc.id, em, u_name, acc.kind, c.state.settings.jwt_auth, c.state.settings.cookie_keys);
-    guard let cookie = cookie_res else {
-        return resp;
-    }
-    let with_cookie_res = zokor.set_cookie(resp, cookie);
-    guard let with_cookie = with_cookie_res else {
-        return resp;
-    }
-    return with_cookie;
+    return signed_in(c, 200, s);
 }
 
-fn logout_handler(c: zokor.Ctx[app.App]) -> http.Response {
-    let sess = auth.current_session(c);
-    if let claims = sess {
-        let now_s = time.wall() / 1000000000;
-        let rem_s = claims.exp - now_s;
-        let _rev = app.revoke_session(c.state, claims.jti, rem_s);
-        let meta = extract_client_meta(c);
-        let _aud = accounts.record_logout_audit(c.state.accounts, tenant(c), claims.sub, meta);
+fn session_account(c: zokor.Ctx[app.App]) -> str {
+    let r = accounts.authenticate(c.state.accounts, auth.session_token(c));
+    if let found = r {
+        if let s = found {
+            return s.account_id;
+        }
     }
-    let resp = zokor.ok_json("{\"ok\":true}");
-    let clear_res = zokor.clear_cookie(resp, "say_session", "/", "");
-    guard let cleared = clear_res else {
-        return resp;
-    }
-    return cleared;
+    return "";
 }
 
-fn verify_email_handler(c: zokor.Ctx[app.App]) -> http.Response {
-    let dr: result[VerifyEmailDto, http.Response] = zokor.dto(c);
+fn google_start(c: zokor.Ctx[app.App]) -> http.Response {
+    let intent = c.query("intent");
+    if len(intent) == 0 {
+        intent = "login";
+    }
+    let account = "";
+    if intent == "link" {
+        account = session_account(c);
+    }
+    let r = accounts.google_start(c.state.accounts, intent, account);
+    guard let url = r else let f = err_of(r) {
+        return failure(c, f);
+    }
+    return zokor.no_store(zokor.redirect(302, url));
+}
+
+fn to_app(c: zokor.Ctx[app.App], path: str) -> http.Response {
+    return zokor.no_store(zokor.redirect(302, c.state.settings.auth.app_url + path));
+}
+
+// The browser arrives here from Google, so every outcome is a redirect
+// back into the app, errors included, as ?error=<CODE>.
+fn google_callback(c: zokor.Ctx[app.App]) -> http.Response {
+    let err_param = c.query("error");
+    if len(err_param) > 0 {
+        return to_app(c, "/login?error=GOOGLE_FAILED");
+    }
+    let r = accounts.google_callback(c.state.accounts, c.query("state"), c.query("code"), meta(c));
+    guard let cb = r else let f = err_of(r) {
+        log_hidden(c, f);
+        return to_app(c, "/login?error=" + code_of(f.why));
+    }
+    switch cb.kind {
+        case accounts.CallbackKind.SignedIn {
+            let resp = to_app(c, "/");
+            return auth.with_session(resp, cb.session_token) ?? resp;
+        }
+        case accounts.CallbackKind.Linked {
+            return to_app(c, "/settings?google=linked");
+        }
+        default {
+            return to_app(c, "/signup/google?pending_token=" + encoding.url_encode(cb.pending_token) +
+                          "&email=" + encoding.url_encode(cb.email_masked));
+        }
+    }
+}
+
+fn google_complete(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[GoogleCompleteDto, http.Response] = zokor.dto(c);
     guard let body = dr else let bad = err_of(dr) {
         return bad;
     }
-    let code = strings.to_upper(strings.trim(body.code));
-    let email_input = strings.to_lower(strings.trim(body.email));
-    if len(code) == 0 || len(email_input) == 0 {
-        return zokor.respond(c.errors, "accounts.invalid_verification_code", c.request_id);
-    }
-    let gr = app.get_verification_code(c.state, code);
-    guard let opt_val = gr else {
-        return zokor.respond(c.errors, "accounts.unavailable", c.request_id);
-    }
-    guard let stored_email = opt_val else {
-        return zokor.respond(c.errors, "accounts.invalid_verification_code", c.request_id);
-    }
-    if strings.to_lower(stored_email) != email_input {
-        return zokor.respond(c.errors, "accounts.invalid_verification_code", c.request_id);
-    }
-
-    let _d = app.delete_verification_code(c.state, code);
-    let vr = accounts.verify_email(c.state.accounts, tenant(c), email_input);
-    guard let acc = vr else let f = err_of(vr) {
+    let r = accounts.google_complete(c.state.accounts, body.pending_token, body.username, body.hold_id, meta(c));
+    guard let s = r else let f = err_of(r) {
         return failure(c, f);
     }
-    let resp = zokor.ok_json(account_json(acc).render());
-    let u_name = acc.username ?? "";
-    let cookie_res = auth.issue_session_cookie(acc.id, email_input, u_name, acc.kind, c.state.settings.jwt_auth, c.state.settings.cookie_keys);
-    guard let cookie = cookie_res else {
-        return resp;
-    }
-    let with_cookie_res = zokor.set_cookie(resp, cookie);
-    guard let with_cookie = with_cookie_res else {
-        return resp;
-    }
-    return with_cookie;
+    return signed_in(c, 200, s);
 }
 
-fn verify_age_handler(c: zokor.Ctx[app.App]) -> http.Response {
-    let sess = auth.current_session(c);
-    guard let claims = sess else {
-        return zokor.respond(c.errors, "unauthorized", c.request_id);
+// Idempotent: no session or an already-revoked one still answers 204 and
+// clears the cookie.
+fn logout(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.authenticate(c.state.accounts, auth.session_token(c));
+    if let found = r {
+        if let s = found {
+            let lr = accounts.logout(c.state.accounts, s, meta(c));
+            guard let _ok = lr else let f = err_of(lr) {
+                return failure(c, f);
+            }
+        }
     }
-    let res = accounts.confirm_age(c.state.accounts, tenant(c), claims.sub);
-    guard let acc = res else let f = err_of(res) {
-        return failure(c, f);
-    }
-    return zokor.ok_json(account_json(acc).render());
+    return auth.without_session(zokor.no_content());
 }
 
-fn show_account(c: zokor.Ctx[app.App]) -> http.Response {
-    let found = accounts.get(c.state.accounts, tenant(c), c.param("id"));
-    guard let n = found else let f = err_of(found) {
+fn logout_others(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.logout_others(c.state.accounts, session(c), meta(c));
+    guard let _n = r else let f = err_of(r) {
         return failure(c, f);
     }
-    return zokor.ok_json(account_json(n).render());
+    return zokor.no_content();
 }
 
-fn list_accounts(c: zokor.Ctx[app.App]) -> http.Response {
-    let offset = c.query_int("offset", 0);
-    let limit = c.query_int("limit", 50);
-    if limit < 1 || limit > 100 || offset < 0 {
-        return zokor.respond_fields(c.errors, "validation_failed",
-            [zokor.field("limit", "must be 1-100, with offset 0 or more")], c.request_id);
+fn forgot(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[ForgotDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
     }
-    let rows = accounts.list(c.state.accounts, tenant(c), offset, limit);
-    guard let ns = rows else let f = err_of(rows) {
+    if let limited = accounts.forgot_password(c.state.accounts, c.state.mailer, body.email, meta(c)) {
+        return failure(c, limited);
+    }
+    return zokor.accepted("{}");
+}
+
+fn reset(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[ResetDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let r = accounts.reset_password(c.state.accounts, body.email, body.code, body.new_password, meta(c));
+    guard let _n = r else let f = err_of(r) {
         return failure(c, f);
     }
-    return zokor.ok_json(accounts_json(ns));
+    return auth.without_session(zokor.no_content());
+}
+
+fn load_account(s: app.App, id: str) -> result[domain.Account, accounts.Failed] {
+    return accounts.account_of(s.accounts, id);
+}
+
+fn load_season_end(s: app.App) -> result[opt[timez.Time], str] {
+    return app.current_season_end(s);
+}
+
+// The account and the season are independent reads: both go at once.
+fn show_me(c: zokor.Ctx[app.App]) -> http.Response {
+    let id = c.local("account_id");
+    let ah = spawn load_account(c.state, id);
+    let sh = spawn load_season_end(c.state);
+    let aj = join_wait(ah);
+    let sj = join_wait(sh);
+    guard let ar = aj else let e = err_of(aj) {
+        c.state.settings.server.logger.error("accounts", "me: " + e);
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+    guard let account = ar else let f = err_of(ar) {
+        return failure(c, f);
+    }
+    let changeable = account.username_changeable_at;
+    if let sr = sj {
+        if let season_r = sr {
+            if let ends_at = season_r {
+                if ends_at.after(changeable) {
+                    changeable = ends_at;
+                }
+            }
+        }
+    }
+    return zokor.no_store(zokor.ok_json(user_json(account, changeable).render()));
+}
+
+fn change_password(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[ChangePasswordDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) {
+        return bad;
+    }
+    let r = accounts.change_password(c.state.accounts, session(c), body.current_password, body.new_password, meta(c));
+    guard let _n = r else let f = err_of(r) {
+        return failure(c, f);
+    }
+    return zokor.no_content();
+}
+
+fn unlink_google(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.unlink_google(c.state.accounts, session(c), meta(c));
+    guard let _ok = r else let f = err_of(r) {
+        return failure(c, f);
+    }
+    return zokor.no_content();
+}
+
+fn delete_me(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.delete_account(c.state.accounts, session(c), meta(c));
+    guard let _ok = r else let f = err_of(r) {
+        return failure(c, f);
+    }
+    return auth.without_session(zokor.accepted("{}"));
 }

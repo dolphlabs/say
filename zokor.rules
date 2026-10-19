@@ -1,0 +1,2 @@
+# zokor check opt-in rules (see zokor_cli README)
+auth require_session

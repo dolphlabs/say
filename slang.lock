@@ -1,2 +1,3 @@
+argon sha256:bf359ea902cfe1ff0154047aac6e8e9f74fa36a385c2a9905a4139aa0aa2e958 git https://github.com/dolphlabs/argon.git tag v0.1.0 dir src/argon
 jwt sha256:461da723122f9d7569c45cab1e57575ff94d0bea7b974db7a95f0ad20ae1fa4a git https://github.com/dolphlabs/jwt.git tag v0.1.0 dir src/jwt
 zokor sha256:3f41f1692182186f373063e9fcbf6d389f9c463daacd24c7373374f51b5b1b6d git https://github.com/dolphlabs/zokor tag v0.2.0 dir zokor

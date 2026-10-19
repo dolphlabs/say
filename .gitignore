@@ -6,3 +6,7 @@ main
 .env
 .env.*
 !.env.example
+
+# load test output
+loadtest/server.log
+loadtest/last-run.txt

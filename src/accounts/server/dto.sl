@@ -1,64 +1,84 @@
+import "timez";
 import "zokor";
 import "../domain" as domain;
+import "../../ledger/domain" as ledger;
 
-pub gc struct RegisterAccountDto {
+gc struct HoldDto {
+    username: str
+}
+
+gc struct SignupDto {
     username: str,
-    email: str,
-    password: str,
-    phone_number: opt[str]
-}
-
-pub gc struct VerifyEmailDto {
-    email: str,
-    code: str
-}
-
-pub gc struct LoginDto {
+    hold_id: str,
     email: str,
     password: str
 }
 
-pub gc struct NewAccountDto {
+gc struct ResendDto {
+    signup_token: opt[str],
     email: opt[str],
-    auth_provider: opt[str]
+    purpose: str
 }
 
-fn username_available_json(username: str, available: bool) -> str {
+gc struct VerifyDto {
+    signup_token: str,
+    code: str
+}
+
+gc struct LoginDto {
+    email: str,
+    password: str
+}
+
+gc struct GoogleCompleteDto {
+    pending_token: str,
+    username: str,
+    hold_id: str
+}
+
+gc struct ForgotDto {
+    email: str
+}
+
+gc struct ResetDto {
+    email: str,
+    code: str,
+    new_password: str
+}
+
+gc struct ChangePasswordDto {
+    current_password: str,
+    new_password: str
+}
+
+fn user_json(a: domain.Account, changeable_at: timez.Time) -> zokor.Json {
     return zokor.jobj()
-        .set_str("username", username)
-        .set_bool("available", available)
-        .render();
+        .set_str("id", a.id)
+        .set_str("username", a.username)
+        .set_opt_str("email", a.email)
+        .set_bool("email_verified", a.email_verified)
+        .set_bool("has_password", a.has_password)
+        .set_bool("google_linked", a.google_linked)
+        .set_str("username_changeable_at", changeable_at.rfc3339())
+        .set_str("created_at", a.created_at.rfc3339());
 }
 
-fn account_json(n: domain.Account) -> zokor.Json {
-    let j = zokor.jobj()
-        .set_str("id", n.id)
-        .set_str("auth_provider", n.auth_provider)
-        .set_str("status", n.status)
-        .set_str("kind", n.kind);
-    if let u = n.username {
-        j.set_str("username", u);
+fn grant_json(g: opt[ledger.Grant]) -> zokor.Json {
+    guard let grant = g else {
+        return zokor.jnull();
     }
-    if let em = n.email {
-        j.set_str("email", em);
-    }
-    if let ph = n.phone_number {
-        j.set_str("phone_number", ph);
-    }
-    if let bg = n.beneficial_owner_group {
-        j.set_str("beneficial_owner_group", bg);
-    }
-    j.set_bool("email_verified", domain.is_email_verified(n));
-    j.set_bool("is_verified", domain.is_verified(n));
-    j.set_bool("is_age_confirmed", domain.is_age_confirmed(n));
-    j.set_bool("is_eligible_for_grant", domain.is_eligible_for_grant(n));
-    return j;
+    return zokor.jobj()
+        .set_int("amount", grant.amount)
+        .set_int("season_ordinal", grant.season_ordinal)
+        .set_str("season_ends_at", grant.season_ends_at.rfc3339());
 }
 
-fn accounts_json(ns: [domain.Account]) -> str {
-    let arr = zokor.jarr();
-    for n in ns {
-        arr.add(account_json(n));
+// A username is fixed until the season it was set in ends.
+fn changeable_at(a: domain.Account, g: opt[ledger.Grant]) -> timez.Time {
+    if let grant = g {
+        if grant.season_ends_at.after(a.username_changeable_at) {
+            return grant.season_ends_at;
+        }
     }
-    return zokor.jobj().set("data", arr).render();
+    return a.username_changeable_at;
 }
