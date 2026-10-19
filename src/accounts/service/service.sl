@@ -1,270 +1,175 @@
+import "crypto";
+import "encoding";
 import "strings";
+import "timez";
 import "../domain" as domain;
 
-pub gc struct Accounts[C] {
-    store: AccountStore[C],
-    new_id: fn() -> str
-}
-
 pub enum Why {
-    Invalid,
-    NotFound,
-    Unavailable,
+    UsernameInvalid,
+    UsernameReserved,
     UsernameTaken,
-    EmailTaken,
-    PhoneTaken,
+    UsernameHoldExpired,
+    EmailInvalid,
+    EmailInUse,
+    WeakPassword,
     InvalidCredentials,
-    Suspended
+    EmailNotVerified,
+    OtpInvalid,
+    OtpExpired,
+    OtpLocked,
+    GoogleEmailInUse,
+    GoogleLinkedElsewhere,
+    GoogleFailed,
+    PendingExpired,
+    LastSignInMethod,
+    RateLimited,
+    Unauthenticated,
+    BadRequest,
+    Busy,
+    Unavailable
 }
 
 pub gc struct Failed {
     why: Why,
-    problems: [domain.Problem],
+    field: str,
+    reason: str,
+    retry_after: int,
+    attempts_left: int,
+    signup_token: str,
     detail: str
 }
 
-pub fn new_accounts[C](store: AccountStore[C], new_id: fn() -> str) -> Accounts[C] {
-    return Accounts[C] { store: store, new_id: new_id };
+pub gc struct AuthConfig {
+    otp_secret: bytes,
+    reserved: [str],
+    grant_amount: int,
+    session_ttl_seconds: int,
+    signup_ttl_seconds: int,
+    hold_seconds: int,
+    pending_seconds: int,
+    oauth_state_seconds: int,
+    google_client_id: str,
+    google_redirect_uri: str,
+    google_auth_url: str,
+    dummy_hash: str
 }
 
-fn failed(why: Why, detail: str) -> Failed {
-    let none_yet: [domain.Problem] = [];
-    return Failed { why: why, problems: none_yet, detail: detail };
+pub gc struct Meta {
+    ip: str,
+    user_agent: str
 }
 
-pub fn check_username[C](s: Accounts[C], tenant_id: str, username: str) -> result[bool, Failed] {
-    let uv = domain.validate_username(username);
-    if let problem = uv {
-        let ps: [domain.Problem] = [domain.Problem { field: "username", reason: problem }];
-        return err(Failed { why: Why.Invalid, problems: ps, detail: problem });
-    }
-    let find = s.store.find_by_username;
-    let r = find(s.store.context, tenant_id, username);
-    guard let found = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
-    }
-    if let _existing = found {
-        return err(failed(Why.UsernameTaken, "username is already taken"));
-    }
-    return ok(true);
+pub gc struct Auth[C] {
+    store: AuthStore[C],
+    cfg: AuthConfig,
+    hasher: Hasher,
+    audit: AuditLog,
+    limiter: LocalLimiter,
+    jwks: Jwks,
+    problems: chan[str],
+    new_id: fn() -> str
 }
 
-pub fn create_with_password[C](s: Accounts[C], tenant_id: str, username: str, email: str, raw_password: str, phone_number: opt[str], audit_meta: AuditMeta) -> result[domain.Account, Failed] {
-    let ps: [domain.Problem] = [];
-    if let up = domain.validate_username(username) {
-        push(ps, domain.Problem { field: "username", reason: up });
-    }
-    if let ep = domain.validate_email(email) {
-        push(ps, domain.Problem { field: "email", reason: ep });
-    }
-    if let pp = domain.validate_password(raw_password) {
-        push(ps, domain.Problem { field: "password", reason: pp });
-    }
-    if let phone = phone_number {
-        if let php = domain.validate_phone_number(phone) {
-            push(ps, domain.Problem { field: "phone_number", reason: php });
-        }
-    }
-    if len(ps) > 0 {
-        return err(Failed { why: Why.Invalid, problems: ps, detail: "validation failed" });
-    }
-
-    let find_u = s.store.find_by_username;
-    let u_res = find_u(s.store.context, tenant_id, username);
-    guard let existing_u = u_res else let e = err_of(u_res) {
-        return err(failed(Why.Unavailable, e));
-    }
-    if let _u = existing_u {
-        return err(failed(Why.UsernameTaken, "username is already taken"));
-    }
-
-    let find_e = s.store.find_by_email;
-    let e_res = find_e(s.store.context, tenant_id, email);
-    guard let existing_e = e_res else let e = err_of(e_res) {
-        return err(failed(Why.Unavailable, e));
-    }
-    if let _e = existing_e {
-        return err(failed(Why.EmailTaken, "email is already registered"));
-    }
-
-    if let phone = phone_number {
-        let find_p = s.store.find_by_phone;
-        let p_res = find_p(s.store.context, tenant_id, phone);
-        guard let existing_p = p_res else let e = err_of(p_res) {
-            return err(failed(Why.Unavailable, e));
-        }
-        if let _p = existing_p {
-            return err(failed(Why.PhoneTaken, "phone number is already registered"));
-        }
-    }
-
-    let hash_res = hash_password(raw_password);
-    guard let pass_hash = hash_res else let e = err_of(hash_res) {
-        return err(failed(Why.Unavailable, "failed to hash password: " + e));
-    }
-
-    let make_id = s.new_id;
-    let none_str: opt[str] = none;
-    let acc = domain.Account {
-        id: make_id(),
-        username: some(username),
-        email: some(email),
-        phone_number: phone_number,
-        password_hash: some(pass_hash),
-        auth_provider: "LOCAL",
-        status: "ACTIVE",
-        kind: "USER",
-        beneficial_owner_group: none_str,
-        email_verified_at: none_str,
-        verified_at: none_str,
-        age_confirmed_at: none_str,
-        created_at: ""
+pub fn new_auth[C](store: AuthStore[C], cfg: AuthConfig, hasher: Hasher, new_id: fn() -> str) -> Auth[C] {
+    return Auth[C] {
+        store: store,
+        cfg: cfg,
+        hasher: hasher,
+        audit: new_audit_log(4096),
+        limiter: new_local_limiter(),
+        jwks: new_jwks(),
+        problems: make_chan(256),
+        new_id: new_id
     };
-
-    let insert = s.store.insert;
-    let ir = insert(s.store.context, acc);
-    guard let _ok = ir else let e = err_of(ir) {
-        return err(failed(Why.Unavailable, e));
-    }
-
-    let audit = s.store.record_signup_audit;
-    let _ar = audit(s.store.context, tenant_id, acc.id, audit_meta);
-
-    return ok(acc);
 }
 
-pub fn create[C](s: Accounts[C], tenant_id: str, email: opt[str], password_hash: opt[str], auth_provider: str) -> result[domain.Account, Failed] {
-    let make_id = s.new_id;
-    let none_str: opt[str] = none;
-    let n = domain.Account {
-        id: make_id(),
-        username: none_str,
-        email: email,
-        phone_number: none_str,
-        password_hash: password_hash,
-        auth_provider: auth_provider,
-        status: "ACTIVE",
-        kind: "USER",
-        beneficial_owner_group: none_str,
-        email_verified_at: none_str,
-        verified_at: none_str,
-        age_confirmed_at: none_str,
-        created_at: ""
-    };
-    let insert = s.store.insert;
-    let r = insert(s.store.context, n);
-    guard let _ok = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
-    }
-    return ok(n);
+fn fail(why: Why, detail: str) -> Failed {
+    return Failed { why: why, field: "", reason: "", retry_after: 0, attempts_left: -1, signup_token: "", detail: detail };
 }
 
-pub fn get[C](s: Accounts[C], tenant_id: str, id: str) -> result[domain.Account, Failed] {
-    let find = s.store.find;
-    let r = find(s.store.context, tenant_id, id);
-    guard let found = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
-    }
-    guard let n = found else {
-        return err(failed(Why.NotFound, ""));
-    }
-    return ok(n);
+fn fail_field(why: Why, field: str, reason: str) -> Failed {
+    return Failed { why: why, field: field, reason: reason, retry_after: 0, attempts_left: -1, signup_token: "", detail: reason };
 }
 
-pub fn get_by_email[C](s: Accounts[C], tenant_id: str, email: str) -> result[domain.Account, Failed] {
-    let find = s.store.find_by_email;
-    let r = find(s.store.context, tenant_id, email);
-    guard let found = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
-    }
-    guard let n = found else {
-        return err(failed(Why.NotFound, ""));
-    }
-    return ok(n);
+fn fail_retry(why: Why, retry_after: int) -> Failed {
+    let f = fail(why, "");
+    f.retry_after = retry_after;
+    return f;
 }
 
-pub fn list[C](s: Accounts[C], tenant_id: str, offset: int, limit: int) -> result[[domain.Account], Failed] {
-    let all = s.store.list;
-    let r = all(s.store.context, tenant_id, offset, limit);
-    guard let rows = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
+fn from_store(f: StoreFail) -> Failed {
+    switch f.fault {
+        case Fault.UsernameTaken { return fail_field(Why.UsernameTaken, "username", "is taken"); }
+        case Fault.EmailTaken { return fail_field(Why.EmailInUse, "email", "is already registered"); }
+        case Fault.IdentityTaken { return fail(Why.GoogleLinkedElsewhere, f.detail); }
+        case Fault.CoolingDown { return fail_retry(Why.RateLimited, f.retry_after); }
+        case Fault.HourlyCap { return fail_retry(Why.RateLimited, f.retry_after); }
+        case Fault.LastSignInMethod { return fail(Why.LastSignInMethod, f.detail); }
+        case Fault.NotFound { return fail(Why.Unauthenticated, f.detail); }
+        default { return fail(Why.Unavailable, f.detail); }
     }
-    return ok(rows);
 }
 
-pub fn verify_email[C](s: Accounts[C], tenant_id: str, email: str) -> result[domain.Account, Failed] {
-    let vf = s.store.verify_email;
-    let r = vf(s.store.context, tenant_id, email);
-    guard let _ok = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
+// Background work reports here instead of logging: the service does no
+// I/O, and platform/app drains the channel into the server's logger.
+pub fn report[C](a: Auth[C], problem: str) {
+    select {
+        case chan_send(a.problems, problem) {}
+        default {}
     }
-    return get_by_email(s, tenant_id, email);
 }
 
-pub fn confirm_age[C](s: Accounts[C], tenant_id: str, id: str) -> result[domain.Account, Failed] {
-    let cf = s.store.confirm_age;
-    let r = cf(s.store.context, tenant_id, id);
-    guard let _ok = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
-    }
-    return get(s, tenant_id, id);
+pub gc struct Token {
+    value: str,
+    hash: bytes
 }
 
-pub fn login[C](s: Accounts[C], tenant_id: str, email: str, raw_password: str, audit_meta: AuditMeta) -> result[domain.Account, Failed] {
-    let ps: [domain.Problem] = [];
-    let clean_email = strings.to_lower(strings.trim(email));
-    if len(clean_email) == 0 {
-        push(ps, domain.Problem { field: "email", reason: "must not be empty" });
-    }
-    if len(raw_password) == 0 {
-        push(ps, domain.Problem { field: "password", reason: "must not be empty" });
-    }
-    if len(ps) > 0 {
-        return err(Failed { why: Why.Invalid, problems: ps, detail: "validation failed" });
-    }
+pub fn hash_token(value: str) -> bytes {
+    return crypto.sha256(to_bytes(value));
+}
 
-    let find_e = s.store.find_by_email;
-    let r = find_e(s.store.context, tenant_id, clean_email);
-    guard let found_e = r else let e = err_of(r) {
-        return err(failed(Why.Unavailable, e));
+pub fn new_token() -> result[Token, str] {
+    let r = crypto.rand(32);
+    guard let b = r else let e = err_of(r) {
+        return err(e);
     }
-    let target_acc: opt[domain.Account] = found_e;
-    if let _found = target_acc {
-    } else {
-        let find_u = s.store.find_by_username;
-        let ru = find_u(s.store.context, tenant_id, clean_email);
-        guard let found_u = ru else let e = err_of(ru) {
-            return err(failed(Why.Unavailable, e));
+    let v = encoding.base64url_encode(b);
+    return ok(Token { value: v, hash: hash_token(v) });
+}
+
+fn new_hex_id(n: int) -> result[str, str] {
+    let r = crypto.rand(n);
+    guard let b = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(encoding.hex_encode(b));
+}
+
+fn new_code() -> result[str, str] {
+    for i in 0..8 {
+        let r = crypto.rand(4);
+        guard let b = r else let e = err_of(r) {
+            return err(e);
         }
-        target_acc = found_u;
+        if let code = domain.code_from(b) {
+            return ok(code);
+        }
     }
-    guard let acc = target_acc else {
-        return err(failed(Why.InvalidCredentials, "invalid email or password"));
-    }
-
-    if !domain.is_active(acc) {
-        return err(failed(Why.Suspended, "account is suspended"));
-    }
-
-    guard let encoded = acc.password_hash else {
-        return err(failed(Why.InvalidCredentials, "invalid email or password"));
-    }
-
-    let verify_res = verify_password(raw_password, encoded);
-    guard let matched = verify_res else let _e = err_of(verify_res) {
-        return err(failed(Why.InvalidCredentials, "invalid email or password"));
-    }
-    if !matched {
-        return err(failed(Why.InvalidCredentials, "invalid email or password"));
-    }
-
-    let audit = s.store.record_login_audit;
-    let _ar = audit(s.store.context, tenant_id, acc.id, audit_meta);
-
-    return ok(acc);
+    return err("could not draw an unbiased code");
 }
 
-pub fn record_logout_audit[C](s: Accounts[C], tenant_id: str, account_id: str, meta: AuditMeta) -> result[bool, str] {
-    let audit = s.store.record_logout_audit;
-    return audit(s.store.context, tenant_id, account_id, meta);
+fn seconds_until(t: timez.Time) -> int {
+    let d = t.sub(timez.now()) / timez.SECOND;
+    if d < 0 {
+        return 0;
+    }
+    return d;
+}
+
+fn session_cache_key(h: bytes) -> str {
+    return "session:" + encoding.hex_encode(h);
+}
+
+fn lower_trim(s: str) -> str {
+    return strings.to_lower(strings.trim(s));
 }
