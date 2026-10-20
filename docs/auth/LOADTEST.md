@@ -75,7 +75,7 @@ What the A/B runs showed:
 - It did **not** reproduce flooding endpoints that never hash
   (`/v1/seasons/current`, the username check) at the same concurrency,
   nor with 50 connections.
-- The trigger seems to be heavy connection churn while workers do long
+- The trigger seemed to be heavy connection churn while workers do long
   CPU-bound work.
 
 Repro: `make test-stack`, then run `loadtest/run.sh` a few times (or the
@@ -83,6 +83,22 @@ same flood by hand) and watch for CLOSE_WAIT sockets and a dead
 `/healthz` after it ends. `sample <pid> 2` (macOS) on the stuck process
 shows the stacks above.
 
-This needs a slang fix before launch. Every say instance under a login
-flood is exposed to it. Until then, keep `HASH_QUEUE` small, put
-connection limits at the load balancer, and alert on `/readyz`.
+**Root cause and fix: dolphlabs/slang#448.** A reactor wait that ended
+by its deadline left its one-shot kernel registration armed, with the
+task pointer as its tag. Under the flood, say's 50 ms Redis deadlines
+time out, and the late replies arrive as stale events. The reactor
+trusted the stale tag:
+
+- if the task had moved on to wait on another fd, the reactor unlinked
+  it from the wrong waiter list and resumed it for nothing;
+- its next wait then linked it into its own list twice, a cycle the
+  reactor walked forever holding that list's lock (the hang);
+- if the task had finished and been freed, the event was a
+  use-after-free (the crash).
+
+The fix tags registrations with `(fd, direction, generation)` and wakes
+a task only through its own current wait. With that runtime the same
+flood was healthy 19 times out of 19 (`/healthz` ok, 0 CLOSE_WAIT, CPU
+idle afterwards). Until #448 is merged and installed, keep `HASH_QUEUE`
+small, put connection limits at the load balancer, and alert on
+`/readyz`.

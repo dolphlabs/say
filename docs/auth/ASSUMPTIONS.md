@@ -67,15 +67,18 @@
 
 ## Known gaps
 
-- **slang reactor defect under login floods** (see LOADTEST.md): an
-  intermittent hang, plus one crash, after about 500 connections close
-  while workers do CPU-bound work. It reproduces without the kdf offload,
-  so it is pre-existing. It needs a slang fix.
-- **httpc does not apply its deadline to connecting** (`net.dial`,
-  `net.tls_dial`). say works around it by racing each Google and SendByte
-  call against a timer, so callers get an answer on time. A lost call's
-  socket lingers until the OS connect timeout (about 75 s). The real fix
-  is `dial_until`, plus a `tls_dial_until` in slang.
+- **slang reactor hang under login floods** (see LOADTEST.md). Fixed in
+  dolphlabs/slang#448, which is not merged yet: stale one-shot
+  registrations from deadline-expired waits woke tasks that had moved on.
+- **httpc ignored its deadline while connecting.** Fixed in
+  dolphlabs/slang#449 (`net.tls_dial_until`, and `httpc` dials with
+  deadlines), which is not merged yet. Until then say races each Google
+  and SendByte call against a timer (`accounts/store/deadline.sl`,
+  `platform/email`). Remove those once #449 is installed.
+- **GC rooting in loops** (dolphlabs/slang#450): a `for x in list` loop
+  that reassigns a string could have it swept past about 50 KB. Auth code
+  builds no such strings in loops, but the fix should be installed before
+  anything renders large bodies that way.
 - **One process.** Per-instance rate limiting (only when Redis is down)
   and in-memory JWKS are per process, by design.
 
