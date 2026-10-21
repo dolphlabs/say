@@ -181,3 +181,28 @@ at once:
 - `imports`: `server -> service -> domain`; a store implements its own
   feature's ports; features reach each other only through `service`;
   `platform/app` wires everything.
+
+## Learned while building the ledger (prompt 02)
+
+- **Integers wrap on overflow** (two's complement, no trap). Money sums go
+  through `ledger/domain/money.sl` (`checked_add`, `checked_mul`), which
+  return `none` instead of wrapping.
+- There is no sort builtin. Small lists use insertion sort (canonical
+  hashes, lock lists); the load test has a merge sort. `str` compares with
+  `<` byte-wise. Postgres ordering does not match that unless the SQL says
+  `COLLATE "C"`, which every lock-order query does.
+- Maps iterate with `for k, v in m` (insertion order), and `del(m, k)`
+  removes a key. `m[k]` on a missing key panics, so check `has(m, k)` first.
+- A generic function cannot be passed as a function value (for example as
+  a transaction body). Write a concrete wrapper. Spawning an instantiated
+  generic function (`spawn run_rollover(l, id)`) works.
+- `join_wait(spawn f(..))` gives `result[R, str]` around whatever `f`
+  returns, so a function returning `result[T, E]` comes back nested.
+  `ledger.summary` unwraps both levels.
+- A session advisory lock needs one connection for the length of the
+  lease: `pg.acquire`, then `pg.release` after `pg_advisory_unlock_all()`.
+  On any error, `pg.close` it before releasing, so the lock can never go
+  back into the pool.
+- `SET LOCAL`/`set_config(..., true)` changes made inside a savepoint are
+  undone by `ROLLBACK TO SAVEPOINT`. The ledger relies on that for its
+  one-posting-per-transaction marker.

@@ -17,9 +17,9 @@
   `feat/check-optional-tenant-auth`). The verify and Google-complete
   transactions call `ledger_store.post_signup_grant` on the same
   connection.
-- **Issuance wallet.** `wallets.allow_negative` is true only for the
-  seeded issuance account (`00000000-0000-4000-8000-000000000001`), so a
-  grant posts as a balanced pair.
+- **Issuance wallet.** Replaced in prompt 02: `system:issuance` is an
+  insert-only system wallet, and grants go through
+  `ledger_store.grant_current_season` (see docs/ledger/).
 - **Tenant removed.** `tenant` and `auth` in `zokor check` are opt-in via
   `zokor.rules`. say opts into `auth require_session` only.
 - **Dropped endpoints:** `GET /v1/accounts`, `GET /v1/accounts/:id`,
@@ -54,8 +54,8 @@
   reach cached sessions.
 - **The hashing pool defaults** to `HASH_WORKERS=2`, `HASH_QUEUE=64`. On
   N cores, keep `HASH_WORKERS` at or below N/2.
-- **Grants serialise** on the issuance wallet row (one hot row per
-  season). That is fine for signups; revisit before bulk season grants.
+- **Grants no longer serialise** on the issuance wallet (prompt 02,
+  docs/ledger/PERFORMANCE.md).
 - **`username_changeable_at`** is the later of the account's own value
   and the current season's end.
 - **Rate limits** count in Redis (`SET NX EX` + `INCR`) and fall back to
@@ -68,13 +68,11 @@
 ## Known gaps
 
 - **slang reactor hang under login floods** (see LOADTEST.md). Fixed in
-  dolphlabs/slang#448, which is not merged yet: stale one-shot
-  registrations from deadline-expired waits woke tasks that had moved on.
+  dolphlabs/slang#448, now installed: stale one-shot registrations from
+  deadline-expired waits woke tasks that had moved on.
 - **httpc ignored its deadline while connecting.** Fixed in
-  dolphlabs/slang#449 (`net.tls_dial_until`, and `httpc` dials with
-  deadlines), which is not merged yet. Until then say races each Google
-  and SendByte call against a timer (`accounts/store/deadline.sl`,
-  `platform/email`). Remove those once #449 is installed.
+  dolphlabs/slang#449, now installed. Google and SendByte calls pass their
+  deadline to `httpc` directly; the race-a-timer workaround is gone.
 - **GC rooting in loops** (dolphlabs/slang#450): a `for x in list` loop
   that reassigns a string could have it swept past about 50 KB. Auth code
   builds no such strings in loops, but the fix should be installed before
@@ -84,9 +82,8 @@
 
 ## TODO for later prompts
 
-- `TODO(season-rollover)`: the season job grants S 1,000 to accounts
-  verified while no season was active, then on each new season (see
-  `ledger/store/postgres.sl`).
+- Done in prompt 02: the season rollover grants S 1,000 to every eligible
+  account when a season becomes active.
 - Admin roles and permissions: none exist yet. `accounts.kind` covers
   system accounts only.
 - Account deletion: anonymise the username on leaderboards, purge
@@ -96,5 +93,3 @@
 - Google sign-in needs real `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
   and `GOOGLE_REDIRECT_URI`, and the app's routes `/signup/google`,
   `/settings` and `/login?error=` (see API.md).
-- Install slang with dolphlabs/slang#445 merged. say needs it for
-  `crypto.rsa_verify_sha256`.

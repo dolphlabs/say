@@ -1,9 +1,9 @@
 # Ledger, wallets and seasons: design
 
-Status: **draft for review** (prompt 02). Nothing below is implemented yet.
-Sections 1–4 follow the prompt. Section 5 lists the decisions I need from
-you. Section 6 lists where this design departs from the spec docs or from
-prompt 01's code.
+Status: **reviewed 2026-10-20 and implemented** (prompt 02). Sections 1–4
+follow the prompt. Section 5 records the decisions taken at review. Section 6
+lists where this design departs from the spec docs or from prompt 01's code.
+Section 7 lists what changed while it was being built.
 
 The money layer has one rule above the others: **every sedi and every
 share moves only through `ledger.post`**. Everything else in this document
@@ -169,18 +169,23 @@ issuance_budget (
 )
 ```
 
-- **Seeding.** On activation the 16 rows are seeded with
-  `season_cap / 16`; shard 0 also takes the remainder. The sum of the rows
-  is the cap remaining, exactly.
-- **Each grant** runs:
+- **Seeding.** On activation the 16 rows are seeded in **whole grants**:
+  the cap allows `cap / amount` grants, each shard gets an equal share and
+  the first shards take one extra each. A shard never holds part of a grant,
+  so no grant can fail on a shard that is short by less than one. The rows
+  are also seeded lazily by the first grant of a season that has none.
+- **A single grant** runs:
   ```sql
   UPDATE issuance_budget SET remaining = remaining - $amount
    WHERE season_id = $1 AND shard = $2 AND remaining >= $amount
   RETURNING remaining
   ```
   on shard `hash(account_id) % 16`. If that shard is short, it tries the
-  others in ascending order. A grant locks exactly one budget row, so there
-  is no lock-order cycle. Contention is 1/16 of a single row.
+  next. A short shard is not locked, so a grant holds at most one budget
+  row. **A rollover chunk** takes shards in ascending order, so two chunks
+  never wait on each other in a cycle.
+- **The budget is taken last**, after the posting, just before COMMIT, so
+  a shard row is locked only for that one statement and the commit.
 - **Cap reached** means no shard has `amount` left. The grant fails with
   `CapReached` and posts nothing. The rollover job stops, emits
   `issuance.cap_reached` (an alert), and logs critical. Verification goes
@@ -204,16 +209,21 @@ issuance_grants (
 `grant_season_allowance(c, account_id, season_id)` runs in the caller's
 transaction and is never spawned:
 
-1. Check eligibility. The account row is already locked by the caller
-   (verification) or is read in the chunk query (rollover).
-2. `INSERT INTO issuance_grants … ON CONFLICT DO NOTHING RETURNING
-   account_id`. If no row comes back, the account already has its grant.
-   Return `AlreadyGranted` (not an error) and post nothing. Two racing
-   callers serialise on the primary key: the second waits for the first to
-   commit, then gets no row back.
-3. Take the budget (§2.2).
-4. Post the `SEASON_GRANT` (`system:issuance` −amount, user +amount free)
-   with business key `grant:{season_id}:{account_id}`.
+1. `SAVEPOINT`, then `INSERT INTO issuance_grants … SELECT … FROM accounts
+   WHERE <eligible> ON CONFLICT DO NOTHING RETURNING account_id`. The
+   eligibility check and the claim are one statement. If no row comes back
+   the account is ineligible or already granted, and nothing is posted.
+   Two racing callers serialise on the primary key: the second waits for
+   the first to commit, then gets no row back.
+2. Post the `SEASON_GRANT`s (`system:issuance` −amount, user +amount free),
+   business key `grant:{season_id}:{account_id}`, in one `post_many`.
+3. Take the budget (§2.2). If it funds fewer grants than were claimed,
+   `ROLLBACK TO SAVEPOINT` and redo the claim for only as many as it can
+   fund; if it funds none, nothing is posted and the result says the cap
+   is reached. The caller's own transaction (a verification) goes on.
+
+Verification and the rollover use this one function (`grant_accounts`):
+with one id and with a chunk of 500.
 
 The foreign key from `business_key` is deferred, so the claim row can come
 before the ledger transaction it names. A claim without its posting cannot
@@ -490,10 +500,17 @@ database transaction that touches wallets calls `post` or `post_many`
 exactly once.** The API documents it, and a debug assertion enforces it by
 setting a per-transaction `say.ledger_posted` GUC.
 
-**The lock order, which is the deadlock rule:** seasons row (shared) →
-issuance budget shard (one row) → user and bot wallets, sorted by
+**The lock order, which is the deadlock rule:** issuance claim row (grants
+only) → seasons row (shared) → user and bot wallets, sorted by
 `(season_id, owner_id, asset_key)` → hold rows, which are only ever touched
-after their wallet is locked. System wallets are never locked.
+after their wallet is locked → issuance budget shard (grants only, last;
+one row for a single grant, ascending rows for a chunk). System wallets are
+never locked.
+
+**One round of statements per call.** `post_many` inserts every
+transaction in one statement, every entry in one, and updates every moved
+wallet in one, so a rollover chunk of 500 grants costs about ten round
+trips, not 1,500.
 
 ### 4.4 Canonical payload hash
 
@@ -612,7 +629,7 @@ Each maps to a registered error code in `src/ledger/server/errors.sl`.
 
 ## 5. Decisions for you
 
-| # | Question | My default |
+| # | Question | Decision (all approved 2026-10-20) |
 |---|---|---|
 | D1 | Exact per-season cap through 16 budget shards (§2.2), rather than an approximate cap re-checked afterwards | Shards: exact, and no hot row |
 | D2 | Where outbox events (`season.*`, `reconciliation.failed`, `issuance.cap_reached`) go | `outbox_events` (exists). A small publisher, kicked through a bounded channel and also polling every 5 s, sends them to the Redis stream `say:events` and stamps `published_at`. Prompt 05 consumes `season.closing` from there. |
@@ -621,7 +638,7 @@ Each maps to a registered error code in `src/ledger/server/errors.sl`.
 | D5 | Rebuild the ledger tables | Migration 004 drops and recreates `wallets`, `ledger_*` and `issuance_grants`, and re-types `fills` and `settlement_claims` `journal_id`. It needs another dev DB reset. Nothing is in production. |
 | D6 | Operator CLI | A subcommand of the same binary, `bin/say admin issuance-policy propose|approve|show --operator <uuid>`, with `src/main.sl` dispatching on the first argument. The alternative is a second entry point, `src/admin.sl`. |
 | D7 | Postings that need ACTIVE take `FOR SHARE` on the season row (§1.3) | Yes. That is about 20 concurrent sharers at most (the pool size). The alternative, an exchange grace period after `season.closing`, is weaker. |
-| D8 | `metadata` excluded from the idempotency hash | Excluded |
+| D8 | `metadata` excluded from the idempotency hash | Excluded (left to me; kept) |
 | D9 | Metrics | There is no metrics backend yet. `platform/metrics` holds counters and gauges, updated through a bounded channel that drops and counts when full, and served at `GET /metrics` (Prometheus text, admin or internal only). |
 | D10 | Verification while no policy exists or the cap is reached | Verify anyway, with no grant; the rollover covers the account later |
 
@@ -664,3 +681,28 @@ Each maps to a registered error code in `src/ledger/server/errors.sl`.
 11. **The reactor fix.** Until dolphlabs/slang#448 is installed, the load
     tests in this prompt run on a locally built slangc from that branch, and
     the performance report will say so.
+
+---
+
+## 7. Changed while building
+
+- **Shards hold whole grants** (§2.2). Splitting the cap evenly in sedis
+  left 125 per shard for a 2,000 cap, so no shard could fund a single
+  S 1,000 grant. The integration test for the cap caught it.
+- **The budget is taken last** (§2.2, §4.3). Taking it first held a shard
+  row for the whole posting. At 32 concurrent grants most sessions were
+  waiting on shard rows.
+- **`post_many` is batched** (§4.3). Rollover chunks went from about 1,500
+  round trips to about ten, which brought 100k grants to about 70 s.
+- **Entries carry `hold_id`** for held-bucket rows, so the holds check can
+  compare each open hold with exactly its own entries.
+- **The claim checks eligibility** in the same statement, so an account
+  suspended between the rollover's page read and its chunk is skipped.
+- **Seeding races.** The first grants of a season seed its budget. A grant
+  that found no rows, while another transaction's seed was still
+  uncommitted, used to report the cap reached. It now seeds if needed and
+  looks once more before reporting it. The hot-account test (32
+  concurrent first grants) caught it.
+- **Wallet creation checks the account's kind** (`user` or `bot`), so a
+  posting cannot open a user wallet for a bot or for an account that does
+  not exist; it fails with `WalletNotFound`.
