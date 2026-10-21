@@ -1,149 +1,110 @@
 import "pg";
+import "redis";
 import "time";
-import "timez";
 import "zokor";
-import "../domain" as domain;
 import "../service" as service;
 
-pub fn no_grant() -> opt[domain.Grant] {
-    let g: opt[domain.Grant] = none;
-    return g;
+pub gc struct Leases {
+    lock: mutex,
+    conns: map[int]pg.Conn,
+    next: int
 }
 
 pub gc struct Postgres {
     pool: pg.Pool,
-    timeout: int
+    redis: opt[redis.Pool],
+    timeout: int,
+    redis_timeout: int,
+    leases: Leases
 }
 
-pub fn on_postgres(pool: pg.Pool, timeout_ns: int) -> service.SeasonStore[Postgres] {
-    return service.SeasonStore[Postgres] {
-        context: Postgres { pool: pool, timeout: timeout_ns },
-        current: pg_current
+pub fn new_postgres(pool: pg.Pool, cache: opt[redis.Pool], timeout_ns: int, redis_timeout_ns: int) -> Postgres {
+    let conns: map[int]pg.Conn = {};
+    return Postgres {
+        pool: pool, redis: cache, timeout: timeout_ns, redis_timeout: redis_timeout_ns,
+        leases: Leases { lock: make_mutex(), conns: conns, next: 1 }
     };
 }
 
-gc struct SeasonRow {
-    id: str,
-    ordinal: int,
-    starts_at: timez.Time,
-    ends_at: timez.Time,
-    status: str
+pub fn ledger_store(p: Postgres) -> service.LedgerStore[Postgres] {
+    return service.LedgerStore[Postgres] {
+        context: p,
+        current: st_current,
+        by_ordinal: st_by_ordinal,
+        open_seasons: st_open_seasons,
+        lease_try: st_lease_try,
+        lease_release: st_lease_release,
+        tick: st_tick,
+        grant_run: st_grant_run,
+        eligible_after: st_eligible_after,
+        grant_chunk: st_grant_chunk,
+        grant_advance: st_grant_advance,
+        grant_finish: st_grant_finish,
+        balance: st_balance,
+        ledger_page: st_ledger_page,
+        recon_request: st_recon_request,
+        recon_run: st_recon_run,
+        recon_latest: st_recon_latest,
+        last_full_recon: st_last_full_recon,
+        aggregate: st_aggregate,
+        halt_state: st_halt_state,
+        halt_clear: st_halt_clear,
+        policy_propose: st_policy_propose,
+        policy_approve: st_policy_approve,
+        policies: st_policies
+    };
 }
 
-fn to_season(r: SeasonRow) -> domain.Season {
-    return domain.Season { id: r.id, ordinal: r.ordinal, starts_at: r.starts_at, ends_at: r.ends_at, status: r.status };
+fn deadline(p: Postgres) -> until {
+    return until_of(time.mono() + p.timeout);
 }
 
-fn current_sql() -> str {
-    return "select id::text as id, ordinal, starts_at, ends_at, status from seasons " +
-           "where status = 'ACTIVE' and starts_at <= now() and ends_at > now() " +
-           "order by starts_at desc limit 1";
+gc struct GotRow {
+    got: bool
 }
 
-fn pg_current(p: Postgres) -> result[opt[domain.Season], str] {
+// The lock lives as long as its session, so the connection is held for the
+// lease and closed (never pooled) if anything goes wrong with it.
+fn st_lease_try(p: Postgres, key: int) -> result[opt[int], str] {
+    let none_id: opt[int] = none;
+    let cr = pg.acquire(p.pool, deadline(p));
+    guard let conn = cr else let e = err_of(cr) {
+        return err(e);
+    }
+    let r: result[[GotRow], str] = zokor.conn_query_all(conn, "select pg_try_advisory_lock($1) as got",
+                                                       [pg.arg_int(key)], deadline(p));
+    guard let rows = r else let e = err_of(r) {
+        pg.close(conn);
+        pg.release(p.pool, conn);
+        return err(e);
+    }
+    if len(rows) != 1 || !rows[0].got {
+        pg.release(p.pool, conn);
+        return ok(none_id);
+    }
+    mutex_lock(p.leases.lock);
+    let id = p.leases.next;
+    p.leases.next = id + 1;
+    p.leases.conns[id] = conn;
+    mutex_unlock(p.leases.lock);
+    return ok(some(id));
+}
+
+fn st_lease_release(p: Postgres, id: int) {
+    mutex_lock(p.leases.lock);
+    if !has(p.leases.conns, id) {
+        mutex_unlock(p.leases.lock);
+        return;
+    }
+    let conn = p.leases.conns[id];
+    del(p.leases.conns, id);
+    mutex_unlock(p.leases.lock);
     let none_args: [pg.Arg] = [];
-    let r: result[opt[SeasonRow], str] = zokor.query_one(p.pool, current_sql(), none_args,
-                                                         until_of(time.mono() + p.timeout));
-    guard let found = r else let e = err_of(r) {
-        return err(e);
+    let r = pg.query(conn, "select pg_advisory_unlock_all()", none_args, deadline(p));
+    if let _rows = r {
+        pg.release(p.pool, conn);
+        return;
     }
-    let none_season: opt[domain.Season] = none;
-    guard let row = found else {
-        return ok(none_season);
-    }
-    return ok(some(to_season(row)));
-}
-
-gc struct IdRow {
-    id: str
-}
-
-gc struct GrantRow {
-    amount: int
-}
-
-// Posts the S `amount` signup grant on `c`, inside the caller's
-// transaction, so it commits or rolls back with the verification that
-// earned it. none when no season is active.
-//
-// Wallets are locked user-first then issuance, the same order every grant
-// takes, so concurrent grants queue rather than deadlock. The issuance
-// wallet is one hot row: every grant in a season serialises on it.
-pub fn post_signup_grant(c: pg.Conn, account_id: str, amount: int, deadline: until) -> result[opt[domain.Grant], str] {
-    let none_grant: opt[domain.Grant] = none;
-    if let problem = domain.grant_problem(amount) {
-        return err(problem);
-    }
-    let none_args: [pg.Arg] = [];
-    let sr: result[[SeasonRow], str] = zokor.conn_query_all(c, current_sql(), none_args, deadline);
-    guard let seasons = sr else let e = err_of(sr) {
-        return err(e);
-    }
-    if len(seasons) == 0 {
-        // TODO(season-rollover): the season job grants eligible accounts
-        // verified while no season was active.
-        return ok(none_grant);
-    }
-    let season = seasons[0];
-    let issuer = domain.issuance_account_id();
-    let key = domain.grant_business_key(season.id, account_id);
-
-    let existing: result[[GrantRow], str] = zokor.conn_query_all(c,
-        "select amount from issuance_grants where account_id = $1 and season_id = $2",
-        [pg.arg_text(account_id), pg.arg_text(season.id)], deadline);
-    guard let had = existing else let e = err_of(existing) {
-        return err(e);
-    }
-    if len(had) > 0 {
-        return ok(some(domain.Grant { amount: had[0].amount, season_ordinal: season.ordinal, season_ends_at: season.ends_at }));
-    }
-
-    for w in [[account_id, "false"], [issuer, "true"]] {
-        let ins = pg.query(c,
-            "insert into wallets (account_id, season_id, asset_key, allow_negative) " +
-            "values ($1, $2, $3, $4::boolean) on conflict (account_id, season_id, asset_key) do nothing",
-            [pg.arg_text(w[0]), pg.arg_text(season.id), pg.arg_text(domain.sedi()), pg.arg_text(w[1])], deadline);
-        guard let _i = ins else let e = err_of(ins) {
-            return err(e);
-        }
-    }
-
-    let tr: result[[IdRow], str] = zokor.conn_query_all(c,
-        "insert into ledger_transactions (business_key, kind, season_id) values ($1, 'ISSUANCE_GRANT', $2) " +
-        "returning id::text as id",
-        [pg.arg_text(key), pg.arg_text(season.id)], deadline);
-    guard let txs = tr else let e = err_of(tr) {
-        return err(e);
-    }
-    if len(txs) != 1 {
-        return err("ledger transaction not created");
-    }
-    let tx_id = txs[0].id;
-
-    for leg in [[account_id, to_str(amount)], [issuer, to_str(0 - amount)]] {
-        let moved: result[[IdRow], str] = zokor.conn_query_all(c,
-            "update wallets set free_units = free_units + $3::bigint " +
-            "where account_id = $1 and season_id = $2 and asset_key = $4 returning id::text as id",
-            [pg.arg_text(leg[0]), pg.arg_text(season.id), pg.arg_text(leg[1]), pg.arg_text(domain.sedi())], deadline);
-        guard let wallets = moved else let e = err_of(moved) {
-            return err(e);
-        }
-        if len(wallets) != 1 {
-            return err("wallet missing for grant leg");
-        }
-        let entry = pg.query(c,
-            "insert into ledger_entries (transaction_id, wallet_id, asset_key, delta_units) values ($1, $2, $3, $4::bigint)",
-            [pg.arg_text(tx_id), pg.arg_text(wallets[0].id), pg.arg_text(domain.sedi()), pg.arg_text(leg[1])], deadline);
-        guard let _e = entry else let e = err_of(entry) {
-            return err(e);
-        }
-    }
-
-    let g = pg.query(c,
-        "insert into issuance_grants (account_id, season_id, amount, journal_id) values ($1, $2, $3, $4)",
-        [pg.arg_text(account_id), pg.arg_text(season.id), pg.arg_int(amount), pg.arg_text(tx_id)], deadline);
-    guard let _g = g else let e = err_of(g) {
-        return err(e);
-    }
-    return ok(some(domain.Grant { amount: amount, season_ordinal: season.ordinal, season_ends_at: season.ends_at }));
+    pg.close(conn);
+    pg.release(p.pool, conn);
 }
