@@ -2,9 +2,10 @@ SLANGC ?= slangc
 ZOKOR ?= zokor
 COMPOSE ?= docker compose -f docker-compose.test.yml
 TEST_DATABASE_URL ?= postgres://say:say-test-only@127.0.0.1:55432/say_test?sslmode=disable
+TEST_APP_DATABASE_URL ?= postgres://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
 TEST_REDIS_URL ?= redis://127.0.0.1:56379
 
-.PHONY: test test-integration test-stack build run check load
+.PHONY: test test-integration test-stack build run check load migrate
 
 # Every package with tests, found rather than listed, so a new one is
 # never left out. Without TEST_DATABASE_URL/TEST_REDIS_URL the Postgres
@@ -19,7 +20,14 @@ test-stack:
 
 # The same suite against a throwaway Postgres 16 and Redis 7.
 test-integration: test-stack
-	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_REDIS_URL='$(TEST_REDIS_URL)' $(MAKE) test
+	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_APP_DATABASE_URL='$(TEST_APP_DATABASE_URL)' \
+	TEST_REDIS_URL='$(TEST_REDIS_URL)' $(MAKE) test
+
+# Migrations run as the schema owner (MIGRATE_DATABASE_URL); the service
+# connects as a member of say_app (DATABASE_URL), which cannot rewrite the
+# journal.
+migrate:
+	DATABASE_URL="$$MIGRATE_DATABASE_URL" $(ZOKOR) migrate migrations
 
 build:
 	mkdir -p bin

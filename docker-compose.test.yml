@@ -11,6 +11,8 @@ services:
       - "127.0.0.1:55432:5432"
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      - ./docker/test-initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U say -d say_test"]
       interval: 1s
