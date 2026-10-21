@@ -50,6 +50,8 @@ pub fn extra(name: str, value: str) -> zokor.FieldError {
 pub fn register_common(r: zokor.Registry) {
     zokor.set_renderer(r, render);
     zokor.register(r, "UNAUTHENTICATED", 401, "Please log in first.");
+    zokor.register(r, "FORBIDDEN", 403, "You do not have access to that.");
+    zokor.register(r, "NOT_FOUND", 404, "That does not exist.");
     zokor.register(r, "RATE_LIMITED", 429, "Too many tries. Wait a moment and try again.");
     zokor.register(r, "UNAVAILABLE", 503, "Something went wrong on our side. Try again.");
     zokor.register(r, "BUSY", 503, "We are busy right now. Try again in a moment.");

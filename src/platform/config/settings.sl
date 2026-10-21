@@ -1,4 +1,5 @@
 import "strings";
+import "timez";
 import "zokor";
 
 pub gc struct AuthSettings {
@@ -26,6 +27,14 @@ pub gc struct EmailSettings {
     timeout_ns: int
 }
 
+pub gc struct LedgerSettings {
+    season_anchor: timez.Time,
+    grant_workers: int,
+    grant_chunk: int,
+    recon_every_ns: int,
+    metrics_token: str
+}
+
 pub gc struct Settings {
     service_name: str,
     profile: str,
@@ -37,11 +46,11 @@ pub gc struct Settings {
     redis_pool_size: int,
     trading_fee: int,
     min_order_notional: int,
-    season_grant_amount: int,
     dispute_window_seconds: int,
     timezone: str,
     auth: AuthSettings,
-    email: EmailSettings
+    email: EmailSettings,
+    ledger: LedgerSettings
 }
 
 fn default_reserved() -> str {
@@ -94,6 +103,24 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
         note(cfg, "GOOGLE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI are required with GOOGLE_CLIENT_ID");
     }
 
+    // Season 01 starts Mon 12 Oct 2026, 00:00 Africa/Lagos.
+    let anchor_text = zokor.str_or(cfg, "SEASON_ANCHOR", "2026-10-11T23:00:00Z");
+    let anchor = timez.unix(0);
+    let ar = timez.parse_rfc3339(anchor_text);
+    if let t = ar {
+        anchor = t;
+    } else let e = err_of(ar) {
+        note(cfg, "SEASON_ANCHOR", "must be an RFC 3339 instant: " + e);
+    }
+    let workers = zokor.int_or(cfg, "GRANT_WORKERS", 4);
+    if workers < 1 || workers > 32 {
+        note(cfg, "GRANT_WORKERS", "must be 1-32");
+    }
+    let metrics_token = zokor.str_or(cfg, "METRICS_TOKEN", "");
+    if len(metrics_token) > 0 && len(metrics_token) < 16 {
+        note(cfg, "METRICS_TOKEN", "must be at least 16 characters, or unset to turn /metrics off");
+    }
+
     return Settings {
         service_name: zokor.str_or(cfg, "SERVICE_NAME", "say"),
         profile: profile,
@@ -105,7 +132,6 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
         redis_pool_size: zokor.int_or(cfg, "REDIS_POOL_SIZE", 8),
         trading_fee: zokor.int_or(cfg, "TRADING_FEE", 1),
         min_order_notional: zokor.int_or(cfg, "MIN_ORDER_NOTIONAL", 2),
-        season_grant_amount: zokor.int_or(cfg, "SEASON_GRANT_AMOUNT", 1000),
         dispute_window_seconds: zokor.int_or(cfg, "DISPUTE_WINDOW_SECONDS", 1800),
         timezone: zokor.str_or(cfg, "TIMEZONE", "Africa/Lagos"),
         auth: AuthSettings {
@@ -130,6 +156,13 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
             sendbyte_url: zokor.optional_url(cfg, "SENDBYTE_URL", "https://api.sendbyte.africa/v1/emails"),
             from: zokor.str_or(cfg, "EMAIL_FROM", "say <verify@say.exchange>"),
             timeout_ns: zokor.duration_or(cfg, "EMAIL_TIMEOUT", 10000000000)
+        },
+        ledger: LedgerSettings {
+            season_anchor: anchor,
+            grant_workers: workers,
+            grant_chunk: zokor.int_or(cfg, "GRANT_CHUNK", 500),
+            recon_every_ns: zokor.duration_or(cfg, "RECON_EVERY", 300000000000),
+            metrics_token: metrics_token
         }
     };
 }

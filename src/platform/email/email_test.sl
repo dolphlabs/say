@@ -25,7 +25,7 @@ fn test_should_time_out_a_send_to_an_unreachable_provider() {
     let took_ms = ((time.mono() - t0) as int) / 1000000;
     guard let _ok = r else let msg = err_of(r) {
         assert(took_ms < 2000, "took " + to_str(took_ms) + " ms");
-        assert(strings.contains(msg, "timed out"), msg);
+        assert(strings.contains(msg, "timeout") || strings.contains(msg, "timed out"), msg);
         return;
     }
     panic("sent to an unreachable provider");

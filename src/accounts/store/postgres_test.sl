@@ -5,8 +5,10 @@ import "proc";
 import "redis";
 import "strings";
 import "time";
+import "timez";
 import "zokor";
 import "../service" as service;
+import "../../ledger/store" as ledger_store;
 
 fn long_deadline() -> until {
     return until_of(time.mono() + 30000000000);
@@ -36,14 +38,7 @@ fn live() -> opt[Live] {
     guard let loaded = ms else let e = err_of(ms) { panic(e); }
     let applied = zokor.migrate(pool, loaded, long_deadline());
     guard let _n = applied else let e = err_of(applied) { panic(e); }
-    let empty: [pg.Arg] = [];
-    let s = pg.pool_query(pool,
-        "insert into seasons (ordinal, starts_at, ends_at, status) " +
-        "select (select coalesce(max(ordinal), 0) + 1 from seasons), now() - interval '1 day', " +
-        "now() + interval '13 days', 'ACTIVE' " +
-        "where not exists (select 1 from seasons where status = 'ACTIVE' and starts_at <= now() and ends_at > now())",
-        empty, long_deadline());
-    guard let _s = s else let e = err_of(s) { panic(e); }
+    prepare_ledger(pool);
     let rr = zokor.redis_from_config(cfg);
     guard let cache = rr else let e = err_of(rr) { panic(e); }
     flush(cache);
@@ -127,7 +122,6 @@ fn config() -> service.AuthConfig {
     return service.AuthConfig {
         otp_secret: to_bytes("integration-otp-secret-0123456789abcdef"),
         reserved: ["say", "admin"],
-        grant_amount: 1000,
         session_ttl_seconds: 2592000,
         signup_ttl_seconds: 1800,
         hold_seconds: 600,
@@ -272,7 +266,7 @@ fn test_should_grant_once_for_twenty_parallel_correct_verifies() {
     assert(r.ok == 1, "ok=" + to_str(r.ok) + " " + inspect(r.other));
     let id = one_account(l.pool, name);
     assert(count(l.pool, "select count(*)::bigint as n from issuance_grants where account_id = $1", id) == 1);
-    assert(count(l.pool, "select count(*)::bigint as n from ledger_transactions t join issuance_grants g on g.journal_id = t.id where g.account_id = $1", id) == 1);
+    assert(count(l.pool, "select count(*)::bigint as n from ledger_transactions t join issuance_grants g on g.business_key = t.business_key where g.account_id = $1::uuid", id) == 1);
     assert(count(l.pool, "select free_units as n from wallets where account_id = $1", id) == 1000);
 }
 
@@ -439,4 +433,27 @@ fn test_should_rate_limit_through_redis() {
         }
     }
     assert(limited == 2, "limited " + to_str(limited));
+}
+
+// Seasons from SEASON_ANCHOR's default and an approved S 1,000 policy, as
+// the scheduler and the operators would leave them, so verification grants.
+fn prepare_ledger(pool: pg.Pool) {
+    let none_redis: opt[redis.Pool] = none;
+    let st = ledger_store.ledger_store(ledger_store.new_postgres(pool, none_redis, 10000000000, 50000000));
+    let ar = timez.parse_rfc3339("2026-10-11T23:00:00Z");
+    guard let anchor = ar else { panic("anchor"); }
+    let tick = st.tick;
+    let r = tick(st.context, timez.now(), anchor);
+    guard let _rep = r else let e = err_of(r) { panic("season tick: " + e); }
+    let none_args: [pg.Arg] = [];
+    let d = until_of(time.mono() + 10000000000);
+    let pr = pg.pool_query(pool,
+        "with op as (insert into accounts (username, email, status, email_verified_at) " +
+        "select 'policyop', 'policyop@test.say', 'ACTIVE', now() " +
+        "where not exists (select 1 from issuance_policies where status = 'APPROVED') " +
+        "on conflict (username) do update set status = 'ACTIVE' returning id) " +
+        "insert into issuance_policies (amount, season_cap, status, proposed_by, approved_at) " +
+        "select 1000, 1000000000000, 'APPROVED', id, now() from op",
+        none_args, d);
+    guard let _p = pr else let e = err_of(pr) { panic("policy: " + e); }
 }

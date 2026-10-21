@@ -56,7 +56,7 @@ pub fn on_sendbyte(api_key: str, url: str, timeout_ns: int) -> Email {
 
 pub fn send(e: Email, msg: EmailMessage) -> result[bool, str] {
     if let sb = e.sendbyte {
-        return sendbyte_within(sb, msg);
+        return sendbyte_send(sb, msg);
     }
     if let m = e.memory {
         return memory_send(m, msg);
@@ -85,41 +85,6 @@ fn memory_send(m: MemorySender, msg: EmailMessage) -> result[bool, str] {
     push(m.sent, msg);
     mutex_unlock(m.lock);
     return ok(true);
-}
-
-gc struct SendCall {
-    s: SendByteSender,
-    msg: EmailMessage,
-    out: chan[result[bool, str]]
-}
-
-fn run_send(x: SendCall) {
-    let r = sendbyte_send(x.s, x.msg);
-    select {
-        case chan_send(x.out, r) {}
-        default {}
-    }
-}
-
-fn send_timer(out: chan[result[bool, str]], ns: int) {
-    time.sleep(ns);
-    select {
-        case chan_send(out, err("sendbyte timed out")) {}
-        default {}
-    }
-}
-
-// httpc does not bound the connect itself, so the send races a timer: the
-// outbox gets its answer by the deadline and retries later either way.
-fn sendbyte_within(s: SendByteSender, msg: EmailMessage) -> result[bool, str] {
-    let out: chan[result[bool, str]] = make_chan(2);
-    spawn run_send(SendCall { s: s, msg: msg, out: out });
-    spawn send_timer(out, s.timeout_ns);
-    let got = chan_recv(out);
-    guard let r = got else {
-        return err("sendbyte gave no answer");
-    }
-    return r;
 }
 
 fn sendbyte_send(s: SendByteSender, msg: EmailMessage) -> result[bool, str] {

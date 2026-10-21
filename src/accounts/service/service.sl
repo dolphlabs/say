@@ -42,7 +42,6 @@ pub gc struct Failed {
 pub gc struct AuthConfig {
     otp_secret: bytes,
     reserved: [str],
-    grant_amount: int,
     session_ttl_seconds: int,
     signup_ttl_seconds: int,
     hold_seconds: int,

@@ -1,3 +1,4 @@
+import "proc";
 import "time";
 import "zokor";
 import "platform/app" as app;
@@ -49,6 +50,11 @@ guard let state = built else let e = err_of(built) {
     exit(1);
 }
 
+let args = proc.args();
+if len(args) > 1 && args[1] == "admin" {
+    exit(app.run_admin(state, args));
+}
+
 let r = zokor.new_router(state);
 web.register_common(r.errors);
 r.health();
@@ -56,6 +62,9 @@ r.ready_check("db", db_ready);
 r.ready_check("cache", cache_ready);
 accounts.mount(r);
 ledger.mount(r);
+if len(settings.ledger.metrics_token) > 0 {
+    r.get("/metrics", app.metrics_route);
+}
 
 app.start_workers(state);
 

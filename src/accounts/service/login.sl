@@ -280,3 +280,26 @@ pub fn delete_account[C](a: Auth[C], s: Session, meta: Meta) -> result[bool, Fai
     audit_event(a, s.account_id, "account_deleted", meta, "{}");
     return ok(true);
 }
+
+// The operator roles an account holds (admin, super_admin).
+pub fn roles_of[C](a: Auth[C], account_id: str) -> result[[str], Failed] {
+    let f = a.store.roles_of;
+    let r = f(a.store.context, account_id);
+    guard let roles = r else let e = err_of(r) {
+        return err(from_store(e));
+    }
+    return ok(roles);
+}
+
+// Operator bootstrap (the CLI); the admin UI for roles is prompt 10.
+pub fn grant_role[C](a: Auth[C], account_id: str, role: str) -> result[bool, Failed] {
+    if role != "admin" && role != "super_admin" {
+        return err(fail(Why.BadRequest, "role must be admin or super_admin"));
+    }
+    let f = a.store.grant_role;
+    let r = f(a.store.context, account_id, role);
+    guard let granted = r else let e = err_of(r) {
+        return err(from_store(e));
+    }
+    return ok(granted);
+}

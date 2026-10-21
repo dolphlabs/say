@@ -348,9 +348,9 @@ fn verify_tx(c: pg.Conn, t: VerifyTx) -> result[service.Verified, str] {
     guard let _u = up else let e = err_of(up) {
         return err(e);
     }
-    let gr = ledger_store.post_signup_grant(c, id, t.v.grant_amount, d);
+    let gr = ledger_store.grant_current_season(c, id, d);
     guard let grant = gr else let e = err_of(gr) {
-        return err(e);
+        return err("season grant: " + e.detail);
     }
     let sr = insert_session(c, id, t.v.session, d);
     guard let _s = sr else let e = err_of(sr) {
@@ -658,9 +658,9 @@ fn google_tx(c: pg.Conn, t: GoogleTx) -> result[service.Created, str] {
             return err(e);
         }
     }
-    let gr = ledger_store.post_signup_grant(c, g.account_id, g.grant_amount, d);
+    let gr = ledger_store.grant_current_season(c, g.account_id, d);
     guard let grant = gr else let e = err_of(gr) {
-        return err(e);
+        return err("season grant: " + e.detail);
     }
     let sr = insert_session(c, g.account_id, g.session, d);
     guard let _s = sr else let e = err_of(sr) {
@@ -751,4 +751,31 @@ fn st_sweep_expired(s: Store) -> result[int, str] {
         }
     }
     return ok(0);
+}
+
+gc struct RoleRow {
+    role: str
+}
+
+fn st_roles_of(s: Store, id: str) -> result[[str], service.StoreFail] {
+    let r: result[[RoleRow], str] = zokor.query_all(s.pg, "select role from account_roles where account_id = $1::uuid",
+                                                   [pg.arg_text(id)], pg_deadline(s));
+    guard let rows = r else let e = err_of(r) {
+        return err(unavailable(e));
+    }
+    let out: [str] = [];
+    for row in rows {
+        push(out, row.role);
+    }
+    return ok(out);
+}
+
+fn st_grant_role(s: Store, id: str, role: str) -> result[bool, service.StoreFail] {
+    let r: result[[IdRow], str] = zokor.query_all(s.pg,
+        "insert into account_roles (account_id, role) select a.id, $2 from accounts a where a.id = $1::uuid " +
+        "on conflict do nothing returning account_id::text as id", [pg.arg_text(id), pg.arg_text(role)], pg_deadline(s));
+    guard let rows = r else let e = err_of(r) {
+        return err(unavailable(e));
+    }
+    return ok(len(rows) == 1);
 }

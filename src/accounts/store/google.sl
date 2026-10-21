@@ -15,7 +15,7 @@ gc struct TokenResponse {
     error: opt[str]
 }
 
-fn google_exchange_now(s: Store, code: str, verifier: str, redirect_uri: str) -> result[str, str] {
+fn st_google_exchange(s: Store, code: str, verifier: str, redirect_uri: str) -> result[str, str] {
     let body = "grant_type=authorization_code" +
         "&code=" + encoding.form_encode(code) +
         "&client_id=" + encoding.form_encode(s.google.client_id) +
@@ -55,7 +55,7 @@ fn max_age_of(cache_control: str) -> int {
     return 0;
 }
 
-fn google_jwks_now(s: Store) -> result[service.JwksDoc, str] {
+fn st_google_jwks(s: Store) -> result[service.JwksDoc, str] {
     let req = httpc.new_request("GET", s.google.jwks_url);
     req.max_redirects = 0;
     let r = s.http.send(req, google_deadline(s));

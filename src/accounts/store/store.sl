@@ -62,6 +62,8 @@ pub fn auth_store(s: Store) -> service.AuthStore[Store] {
         change_password: st_change_password,
         unlink_google: st_unlink_google,
         delete_account: st_delete_account,
+        roles_of: st_roles_of,
+        grant_role: st_grant_role,
         identity_owner: st_identity_owner,
         email_owner: st_email_owner,
         create_google_account: st_create_google_account,

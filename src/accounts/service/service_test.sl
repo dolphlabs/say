@@ -390,7 +390,7 @@ fn test_should_refuse_to_unlink_google_from_a_password_less_account() {
     let a = fresh(f);
     let cr = f_create_google(f, GoogleSignup {
         account_id: "g1", username: "googler", email: "g@say.test", subject: "sub-1",
-        grant_amount: 1000, session: NewSession { token_hash: hash_token("t"), ttl_seconds: 60, ip: "", user_agent: "" }
+        session: NewSession { token_hash: hash_token("t"), ttl_seconds: 60, ip: "", user_agent: "" }
     });
     guard let _c = cr else { panic("create"); }
     let r = unlink_google(a, Session { account_id: "g1", token_hash: hash_token("t") }, meta());
@@ -448,4 +448,18 @@ fn test_should_back_off_exponentially_to_an_hour() {
     assert(outbox_backoff_seconds(0) == 1);
     assert(outbox_backoff_seconds(3) == 8);
     assert(outbox_backoff_seconds(30) == 3600);
+}
+
+fn test_should_list_an_operator_roles() {
+    let f = new_fake();
+    let r = roles_of(fresh(f), "admin-1");
+    guard let roles = r else { panic("roles"); }
+    assert(len(roles) == 1 && roles[0] == "admin");
+}
+
+fn test_should_refuse_unknown_roles() {
+    let f = new_fake();
+    if let _ok = grant_role(fresh(f), "admin-1", "owner") {
+        panic("unknown role accepted");
+    }
 }

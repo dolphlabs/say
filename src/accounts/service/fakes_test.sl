@@ -221,7 +221,7 @@ fn f_verify_email(f: Fake, v: VerifyEmail) -> result[Verified, StoreFail] {
     let grant = none_g;
     if f.season_active {
         if !has(f.grants, a.id) {
-            f.grants[a.id] = v.grant_amount;
+            f.grants[a.id] = 1000;
         }
         grant = some(ledger.Grant { amount: f.grants[a.id], season_ordinal: 1, season_ends_at: timez.unix(2000000000) });
     }
@@ -359,6 +359,21 @@ fn f_unlink_google(f: Fake, id: str) -> result[bool, StoreFail] {
     return ok(true);
 }
 
+fn f_grant_role(f: Fake, id: str, role: str) -> result[bool, StoreFail] {
+    if !has(f.accounts, id) {
+        return err(StoreFail { fault: Fault.NotFound, detail: "account", retry_after: 0 });
+    }
+    return ok(true);
+}
+
+fn f_roles_of(f: Fake, id: str) -> result[[str], StoreFail] {
+    let out: [str] = [];
+    if id == "admin-1" {
+        push(out, "admin");
+    }
+    return ok(out);
+}
+
 fn f_delete_account(f: Fake, id: str) -> result[[bytes], StoreFail] {
     mutex_lock(f.lock);
     f.accounts[id].status = "DELETED";
@@ -393,11 +408,11 @@ fn f_create_google(f: Fake, g: GoogleSignup) -> result[Created, StoreFail] {
     mutex_lock(f.lock);
     let none_h: opt[str] = none;
     f.accounts[g.account_id] = FakeAccount { id: g.account_id, username: g.username, email: g.email, status: "ACTIVE", hash: none_h, google_sub: g.subject };
-    f.grants[g.account_id] = g.grant_amount;
+    f.grants[g.account_id] = 1000;
     f.sessions[hx(g.session.token_hash)] = FakeSession { account_id: g.account_id, revoked: false };
     let a = as_account(f.accounts[g.account_id]);
     mutex_unlock(f.lock);
-    return ok(Created { account: a, grant: some(ledger.Grant { amount: g.grant_amount, season_ordinal: 1, season_ends_at: timez.unix(2000000000) }) });
+    return ok(Created { account: a, grant: some(ledger.Grant { amount: 1000, season_ordinal: 1, season_ends_at: timez.unix(2000000000) }) });
 }
 
 fn f_link_google(f: Fake, id: str, sub: str, email: str) -> result[bool, StoreFail] {
@@ -546,6 +561,8 @@ fn fake_store(f: Fake) -> AuthStore[Fake] {
         change_password: f_change_password,
         unlink_google: f_unlink_google,
         delete_account: f_delete_account,
+        roles_of: f_roles_of,
+        grant_role: f_grant_role,
         identity_owner: f_identity_owner,
         email_owner: f_email_owner,
         create_google_account: f_create_google,
@@ -613,7 +630,6 @@ fn fake_config() -> AuthConfig {
     return AuthConfig {
         otp_secret: to_bytes("test-otp-secret-0123456789abcdef0123"),
         reserved: ["say", "admin", "support"],
-        grant_amount: 1000,
         session_ttl_seconds: 2592000,
         signup_ttl_seconds: 1800,
         hold_seconds: 600,

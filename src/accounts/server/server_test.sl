@@ -5,6 +5,7 @@ import "proc";
 import "redis";
 import "strings";
 import "time";
+import "timez";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/cache" as cache;
@@ -12,6 +13,7 @@ import "../../platform/config" as config;
 import "../../platform/db" as db;
 import "../../platform/email" as email;
 import "../../platform/web" as web;
+import "../../ledger/store" as ledger_store;
 
 gc struct Rig {
     r: zokor.Router[app.App],
@@ -44,13 +46,7 @@ fn rig() -> opt[Rig] {
     guard let loaded = ms else let e = err_of(ms) { panic(e); }
     let applied = zokor.migrate(d.pool, loaded, d10());
     guard let _n = applied else let e = err_of(applied) { panic(e); }
-    let s = db.run(d,
-        "insert into seasons (ordinal, starts_at, ends_at, status) " +
-        "select (select coalesce(max(ordinal), 0) + 1 from seasons), now() - interval '1 day', " +
-        "now() + interval '13 days', 'ACTIVE' " +
-        "where not exists (select 1 from seasons where status = 'ACTIVE' and starts_at <= now() and ends_at > now())",
-        d10());
-    guard let _s = s else let e = err_of(s) { panic(e); }
+    prepare_ledger(d);
     let cr = cache.open(cfg);
     guard let c = cr else let e = err_of(cr) { panic(e); }
     if let pool = c.pool {
@@ -311,4 +307,25 @@ fn test_should_redirect_to_google_with_pkce() {
     let cb = get(g.r, "/v1/auth/google/callback?state=unknown&code=x", "");
     assert(zokor.resp_status(cb) == 302);
     assert(strings.contains(zokor.resp_header(cb, "location"), "/login?error=PENDING_EXPIRED"), zokor.resp_header(cb, "location"));
+}
+
+// Seasons from SEASON_ANCHOR's default and an approved S 1,000 policy, as
+// the scheduler and the operators would leave them, so verification grants.
+fn prepare_ledger(d: db.Db) {
+    let none_redis: opt[redis.Pool] = none;
+    let st = ledger_store.ledger_store(ledger_store.new_postgres(d.pool, none_redis, 10000000000, 50000000));
+    let ar = timez.parse_rfc3339("2026-10-11T23:00:00Z");
+    guard let anchor = ar else { panic("anchor"); }
+    let tick = st.tick;
+    let r = tick(st.context, timez.now(), anchor);
+    guard let _rep = r else let e = err_of(r) { panic("season tick: " + e); }
+    let pr = db.run(d,
+        "with op as (insert into accounts (username, email, status, email_verified_at) " +
+        "select 'policyop', 'policyop@test.say', 'ACTIVE', now() " +
+        "where not exists (select 1 from issuance_policies where status = 'APPROVED') " +
+        "on conflict (username) do update set status = 'ACTIVE' returning id) " +
+        "insert into issuance_policies (amount, season_cap, status, proposed_by, approved_at) " +
+        "select 1000, 1000000000000, 'APPROVED', id, now() from op",
+        d10());
+    guard let _p = pr else let e = err_of(pr) { panic("policy: " + e); }
 }

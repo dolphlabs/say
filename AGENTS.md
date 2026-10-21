@@ -11,6 +11,9 @@ DO NOT ADD COMMENTS TO CODE EXCEPT WHEN NECESSARY
 - `zokor check [--json]`: the rules below, as `file:line: rule: message`
   (one JSON object per line with --json). Fix what it reports.
 - `make run`: build and serve (configuration from `.env`, see `.env.example`).
+- `make migrate`: apply migrations as the schema owner (`MIGRATE_DATABASE_URL`);
+  the service itself runs as a `say_app` member that cannot rewrite the journal.
+- `bin/say admin ...`: operator commands (roles, issuance policies).
 - `zokor add feature <name>`: a new feature slice, wired in. Use it rather
   than writing the files by hand.
 - `zokor add route <feature> <METHOD> <path> <handler>`: a route under the

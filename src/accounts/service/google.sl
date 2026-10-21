@@ -437,7 +437,6 @@ pub fn google_complete[C](a: Auth[C], pending_token: str, raw_username: str, hol
         username: username,
         email: pending.email,
         subject: pending.subject,
-        grant_amount: a.cfg.grant_amount,
         session: new_session(token, a.cfg.session_ttl_seconds, meta)
     });
     guard let made = cr else let f = err_of(cr) {

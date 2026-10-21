@@ -1,6 +1,7 @@
 import "crypto";
 import "encoding";
 import "strings";
+import "time";
 import "timez";
 import "zokor";
 import "../config" as config;
@@ -8,6 +9,7 @@ import "../db" as db;
 import "../cache" as cache;
 import "../email" as email;
 import "../email/templates" as templates;
+import "../metrics" as metrics;
 import "../../accounts/service" as accounts;
 import "../../accounts/store" as accounts_store;
 import "../../ledger/service" as ledger;
@@ -23,6 +25,7 @@ pub gc struct App {
     ledger: ledger.Ledger[ledger_store.Postgres],
     mailer: accounts.Mailer[Postman],
     settings: config.Settings,
+    metrics: metrics.Registry,
     db: opt[db.Db],
     cache: opt[cache.Cache]
 }
@@ -68,7 +71,6 @@ pub fn auth_config(s: config.Settings, dummy_hash: str) -> accounts.AuthConfig {
     return accounts.AuthConfig {
         otp_secret: to_bytes(s.auth.otp_secret),
         reserved: s.auth.reserved_usernames,
-        grant_amount: s.season_grant_amount,
         session_ttl_seconds: 2592000,
         signup_ttl_seconds: 1800,
         hold_seconds: 600,
@@ -95,12 +97,22 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
             jwks_url: s.auth.google_jwks_url
         },
         accounts_store.Timeouts { pg_ns: s.auth.pg_timeout_ns, redis_ns: s.auth.redis_timeout_ns, google_ns: s.auth.google_timeout_ns });
+    let zr = timez.load_zone(s.timezone);
+    guard let zone = zr else let e = err_of(zr) {
+        return err("time zone: " + e);
+    }
+    let lcfg = ledger.default_config(s.ledger.season_anchor, zone);
+    lcfg.grant_workers = s.ledger.grant_workers;
+    lcfg.chunk_size = s.ledger.grant_chunk;
+    lcfg.recon_every_ns = s.ledger.recon_every_ns;
+    let lst = ledger_store.new_postgres(pool, c.pool, s.auth.pg_timeout_ns, s.auth.redis_timeout_ns);
     let hasher = accounts.new_hasher(s.auth.hash_workers, s.auth.hash_queue, accounts.argon_hash, accounts.argon_verify);
     return ok(App {
         accounts: accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid),
-        ledger: ledger.new_ledger(ledger_store.on_postgres(pool, s.auth.pg_timeout_ns)),
+        ledger: ledger.new_ledger(ledger_store.ledger_store(lst), lcfg, timez.system_clock()),
         mailer: mailer_on(mail, s.email.from),
         settings: s,
+        metrics: metrics.new_registry(),
         db: some(d),
         cache: some(c)
     });
@@ -150,9 +162,96 @@ fn drain_problems(a: App) -> int {
     return 0;
 }
 
+pub fn has_role(a: App, account_id: str, role: str) -> result[bool, str] {
+    let r = accounts.roles_of(a.accounts, account_id);
+    guard let roles = r else let f = err_of(r) {
+        return err(f.detail);
+    }
+    for have in roles {
+        if have == role || (role == "admin" && have == "super_admin") {
+            return ok(true);
+        }
+    }
+    return ok(false);
+}
+
+// The ledger's background reports, into the log and the metrics.
+fn drain_ledger_signals(a: App) -> int {
+    let log = a.settings.server.logger;
+    while true {
+        let got = chan_recv(a.ledger.signals);
+        guard let sig = got else {
+            return 0;
+        }
+        if sig.level == "metric" {
+            if sig.text == "gauge" {
+                metrics.set(a.metrics, sig.name, sig.value);
+            } else {
+                metrics.add(a.metrics, sig.name, sig.value);
+            }
+        } else if sig.level == "critical" {
+            log.error("ledger", "CRITICAL " + sig.name + ": " + sig.text);
+            metrics.add(a.metrics, "ledger_critical_total", 1);
+        } else if sig.level == "warn" {
+            log.warn("ledger", sig.name + ": " + sig.text);
+        } else {
+            log.log("ledger", sig.text);
+        }
+    }
+    return 0;
+}
+
+fn run_outbox_publisher(a: App) -> int {
+    guard let d = a.db else {
+        return 0;
+    }
+    guard let c = a.cache else {
+        return 0;
+    }
+    let ticks: chan[int] = make_chan(1);
+    spawn ledger_ticker(ticks, 5000);
+    while true {
+        let r = db.publish_outbox(d, c, 100, a.settings.auth.pg_timeout_ns);
+        if let n = r {
+            if n > 0 {
+                metrics.add(a.metrics, "outbox_published_total", n);
+                continue;
+            }
+        } else let e = err_of(r) {
+            a.settings.server.logger.warn("outbox", "publish failed: " + e);
+        }
+        select {
+            case let _t = chan_recv(ticks) {}
+            case let _k = chan_recv(a.ledger.kicks) {}
+        }
+    }
+    return 0;
+}
+
+fn ledger_ticker(ticks: chan[int], every_ms: int) {
+    while true {
+        time.sleep(every_ms * 1000000);
+        select {
+            case chan_send(ticks, 1) {}
+            default {}
+        }
+    }
+}
+
+// The ledger's long-lived tasks; each takes its own advisory lock, so
+// across instances only one runs each job at a time.
+pub fn start_ledger_workers(a: App) {
+    spawn drain_ledger_signals(a);
+    spawn ledger.run_season_scheduler(a.ledger);
+    spawn ledger.run_reconciler(a.ledger);
+    spawn ledger.run_aggregator(a.ledger);
+    spawn run_outbox_publisher(a);
+}
+
 // The background half of auth: the audit writer, outbox drainer, expired
 // row sweeper and, when Google is configured, the JWKS refresher.
 pub fn start_workers(a: App) {
+    start_ledger_workers(a);
     spawn drain_problems(a);
     spawn accounts.run_audit_writer(a.accounts);
     spawn accounts.run_outbox_worker(a.accounts, a.mailer, 5000);

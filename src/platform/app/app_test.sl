@@ -7,14 +7,12 @@ fn settings() -> config.Settings {
     let m: map[str]str = {};
     m["PORT"] = "9000";
     m["OTP_SECRET"] = "app-test-otp-secret-0123456789abcdef";
-    m["SEASON_GRANT_AMOUNT"] = "1000";
     m["RESERVED_USERNAMES"] = "say,admin";
     return config.settings_from(zokor.config_from_values(m));
 }
 
 fn test_should_carry_settings_into_the_auth_config() {
     let c = auth_config(settings(), "dummy");
-    assert(c.grant_amount == 1000);
     assert(c.session_ttl_seconds == 2592000);
     assert(c.signup_ttl_seconds == 1800);
     assert(c.hold_seconds == 600);

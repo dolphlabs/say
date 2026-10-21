@@ -239,7 +239,6 @@ pub fn verify_signup[C](a: Auth[C], signup_token: str, raw_code: str, meta: Meta
             purpose: domain.purpose_verify_email(),
             code_hmac: domain.code_hmac(a.cfg.otp_secret, domain.purpose_verify_email(), p.account_id, code)
         },
-        grant_amount: a.cfg.grant_amount,
         session: new_session(token, a.cfg.session_ttl_seconds, meta)
     });
     guard let v = r else let f = err_of(r) {

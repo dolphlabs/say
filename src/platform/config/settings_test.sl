@@ -15,7 +15,6 @@ fn test_should_read_settings_once_with_spec_defaults() {
     let cfg = values(["PORT", "8080", "OTP_SECRET", "0123456789abcdef0123456789abcdef"]);
     let s = settings_from(cfg);
     assert(s.port == 8080);
-    assert(s.season_grant_amount == 1000);
     assert(s.timezone == "Africa/Lagos");
     assert(s.email.provider == "console");
     assert(s.auth.redis_timeout_ns == 50000000);

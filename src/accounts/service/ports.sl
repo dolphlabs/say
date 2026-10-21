@@ -87,7 +87,6 @@ pub gc struct CodeUse {
 
 pub gc struct VerifyEmail {
     code: CodeUse,
-    grant_amount: int,
     session: NewSession
 }
 
@@ -123,7 +122,6 @@ pub gc struct GoogleSignup {
     username: str,
     email: str,
     subject: str,
-    grant_amount: int,
     session: NewSession
 }
 
@@ -186,6 +184,8 @@ pub gc struct AuthStore[C] {
     change_password: fn(C, str, str, str, str, bytes) -> result[[bytes], StoreFail],
     unlink_google: fn(C, str) -> result[bool, StoreFail],
     delete_account: fn(C, str) -> result[[bytes], StoreFail],
+    roles_of: fn(C, str) -> result[[str], StoreFail],
+    grant_role: fn(C, str, str) -> result[bool, StoreFail],
 
     identity_owner: fn(C, str) -> result[opt[str], StoreFail],
     email_owner: fn(C, str) -> result[opt[str], StoreFail],

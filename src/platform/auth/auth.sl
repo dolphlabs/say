@@ -47,3 +47,24 @@ pub fn with_session(resp: http.Response, token: str) -> result[http.Response, st
 pub fn without_session(resp: http.Response) -> http.Response {
     return zokor.clear_cookie(resp, cookie_name(), "/", "") ?? resp;
 }
+
+fn require_role(c: zokor.Ctx[app.App], role: str) -> opt[http.Response] {
+    let r = app.has_role(c.state, c.local("account_id"), role);
+    guard let allowed = r else let e = err_of(r) {
+        c.state.settings.server.logger.error("auth", "role lookup failed: " + e);
+        return some(zokor.respond(c.errors, "UNAVAILABLE", c.request_id));
+    }
+    if !allowed {
+        return some(zokor.respond(c.errors, "FORBIDDEN", c.request_id));
+    }
+    return none;
+}
+
+// After require_session: the caller must hold the operator role.
+pub fn require_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
+    return require_role(c, "admin");
+}
+
+pub fn require_super_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
+    return require_role(c, "super_admin");
+}
