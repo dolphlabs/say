@@ -16,6 +16,8 @@ import "../../ledger/service" as ledger;
 import "../../ledger/store" as ledger_store;
 import "../../markets/service" as markets;
 import "../../markets/store" as markets_store;
+import "../../exchange/service" as exchange;
+import "../../exchange/store" as exchange_store;
 // zokor:imports
 
 pub gc struct Postman {
@@ -28,6 +30,8 @@ pub gc struct App {
     // zokor:fields
     accounts: accounts.Auth[accounts_store.Store],
     ledger: ledger.Ledger[ledger_store.Postgres],
+    ownership: exchange.Ownership[exchange_store.Postgres],
+    node_id: str,
     mailer: accounts.Mailer[Postman],
     settings: config.Settings,
     metrics: metrics.Registry,
@@ -111,6 +115,13 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     lcfg.chunk_size = s.ledger.grant_chunk;
     lcfg.recon_every_ns = s.ledger.recon_every_ns;
     let lst = ledger_store.new_postgres(pool, c.pool, s.auth.pg_timeout_ns, s.auth.redis_timeout_ns);
+    let runtime_store = exchange_store.new_postgres(pool, s.auth.pg_timeout_ns);
+    let ownership = exchange.new_ownership(exchange_store.ownership_store(runtime_store));
+    let node_id = new_uuid();
+    let node_registered = exchange.register_node(ownership, node_id, "say", 10);
+    guard let _registered = node_registered else let e = err_of(node_registered) {
+        return err("runtime node registration failed: " + e);
+    }
     let hasher = accounts.new_hasher(s.auth.hash_workers, s.auth.hash_queue, accounts.argon_hash, accounts.argon_verify);
     let clock=timez.system_clock();
     let registry=markets.new_markets(markets_store.on_postgres(d.pool,s.auth.pg_timeout_ns,lst,zone),new_uuid,clock);
@@ -123,6 +134,8 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         // zokor:build
         accounts: accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid),
         ledger: ledger.new_ledger(ledger_store.ledger_store(lst), lcfg, clock),
+        ownership: ownership,
+        node_id: node_id,
         mailer: mailer_on(mail, s.email.from),
         settings: s,
         metrics: metrics.new_registry(),
@@ -272,6 +285,7 @@ pub fn start_ledger_workers(a: App) {
 // row sweeper and, when Google is configured, the JWKS refresher.
 pub fn start_workers(a: App) {
     start_ledger_workers(a);
+    spawn run_runtime_heartbeat(a);
     spawn markets.run_snapshots(a.markets);
     spawn markets.run_scheduler(a.markets);
     spawn drain_market_signals(a);
@@ -282,6 +296,27 @@ pub fn start_workers(a: App) {
     if len(a.settings.auth.google_client_id) > 0 {
         spawn accounts.run_jwks_refresher(a.accounts);
     }
+}
+
+fn run_runtime_heartbeat(a: App) -> int {
+    let no_markets: [str] = [];
+    let no_epochs: [int] = [];
+    while true {
+        let beat = exchange.heartbeat(a.ownership, a.node_id, 10, no_markets, no_epochs);
+        if let heartbeat_result = beat {
+            if !heartbeat_result.node_live {
+                a.settings.server.logger.error("exchange", "runtime node lease expired; heartbeat stopped");
+                metrics.add(a.metrics, "exchange_runtime_node_expired_total", 1);
+                return 0;
+            }
+        } else let e = err_of(beat) {
+            a.settings.server.logger.error("exchange", "runtime node heartbeat failed: " + e);
+            metrics.add(a.metrics, "exchange_runtime_heartbeat_failures_total", 1);
+            return 0;
+        }
+        time.sleep(2000000000);
+    }
+    return 0;
 }
 
 fn drain_market_signals(a: App) -> int {

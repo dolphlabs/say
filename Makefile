@@ -5,7 +5,7 @@ TEST_DATABASE_URL ?= postgres://say:say-test-only@127.0.0.1:55432/say_test?sslmo
 TEST_APP_DATABASE_URL ?= postgres://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
 TEST_REDIS_URL ?= redis://127.0.0.1:56379
 
-.PHONY: test test-integration test-stack build run check load migrate
+.PHONY: test test-stream test-integration test-stack build run check load migrate
 
 # Every package with tests, found rather than listed, so a new one is
 # never left out. Without TEST_DATABASE_URL/TEST_REDIS_URL the Postgres
@@ -14,6 +14,10 @@ test:
 	@set -e; for d in $$(find src -name '*_test.sl' | xargs -n1 dirname | sort -u); do \
 		$(SLANGC) test $$d; \
 	done
+	$(MAKE) test-stream
+
+test-stream:
+	npm --prefix packages/say-stream test
 
 test-stack:
 	$(COMPOSE) up -d --wait

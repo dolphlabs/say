@@ -5,9 +5,10 @@ Design date: 2026-10-26.
 
 The user authorized prompts 03–10 on2026-10-27. This remains prompt05's
 PRD and technical contract. Registry APIs, core planning/apply/replay and
-measured core validation now exist. Runtime migrations, admission/ownership,
-actors and durable execution are the next implementation stage; no runtime
-fault/load result is implied by the matching benchmarks.
+measured core validation now exist. Runtime migrations, ownership and node
+heartbeat primitives are implemented; durable admission, actors, recovery
+and execution remain. No runtime fault/load result is implied by the matching
+benchmarks.
 
 ## 0. PRD, current project and boundaries
 

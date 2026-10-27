@@ -20,7 +20,11 @@ Prompt 05 groundwork: registry opening now creates the market's collateral
 and outcome system wallets in the same transaction. Migration 010 adds a
 restricted queue-permit lock function so the runtime role can follow the
 documented queue-before-wallet lock order without direct budget-table access.
-The actor, durable admission, commit/recovery and endpoint work remain pending.
+Fresh node incarnations, conditional heartbeat/lease renewal, same-node
+ownership renewal, expired-owner epoch fencing and release are implemented
+and wired into app startup. Actor assignment, durable admission,
+commit/recovery and endpoint work remain pending; schema-backed ownership
+tests are present but skip when the test database URLs are unset.
 
 Implementation resolves design clarifications within the requested policies;
 any remaining source/provider or operational dependency will be recorded

@@ -7,7 +7,7 @@ import "strings";
 import "time";
 import "zokor";
 import "../domain" as core;
-import "../service" as exchange;
+import "../service" as service;
 import "../../platform/db" as db;
 import "../../platform/cache" as cache;
 
@@ -95,7 +95,7 @@ fn schema_final_arg(r: SchemaRig,ref: str) -> FinalArg {
     let created=core.new_book(schema_policy(r),4,0); guard let b=created else { panic("book"); }
     let w=core.new_workspace(&b,4);
     let cmd=core.Command { kind:"Snapshot",seq:1,ref:ref,order:core.empty_order(),order_id:"",account_id:"",system:true,reason:"" };
-    assert(core.plan(&b,cmd,&mut w)==""); let converted=exchange.record(&b,&mut w); guard let record=converted else { panic("record"); }
+    assert(core.plan(&b,cmd,&mut w)==""); let converted=service.record(&b,&mut w); guard let record=converted else { panic("record"); }
     return FinalArg { rig:r,ref:ref,input:json.encode(cmd),record:json.encode(record),previous:record.prev_hash,next:record.state_hash,node:r.node,epoch:1,pause:false,null_seq:false };
 }
 
@@ -158,5 +158,58 @@ fn test_legacy_publisher_does_not_claim_private_runtime_events() {
     let published=db.publish_outbox(db.Db { pool:r.app },cache.in_memory(),10,10000000000); guard let count=published else let e=err_of(published) { panic(e); }
     assert(count==1);
     assert(schema_int(r.owner,"select count(*)::bigint as value from outbox_events where audience='account' and published_at is null",[])==1);
+    schema_close(r);
+}
+
+fn test_runtime_ownership_renews_fences_and_releases_leases() {
+    guard let r=schema_rig() else { return; }
+    let ownership=service.new_ownership(ownership_store(new_postgres(r.app,10000000000)));
+    let next_node=schema_uuid(r);
+    let registered=service.register_node(ownership,next_node,"successor",15);
+    guard let did_register=registered else let e=err_of(registered) { panic(e); }
+    assert(did_register);
+
+    let same_node=service.acquire(ownership,r.market,r.node,10);
+    guard let same_claim=same_node else let e=err_of(same_node) { panic(e); }
+    assert(!same_claim.acquired && same_claim.renewed && same_claim.epoch==1);
+
+    let competing=service.acquire(ownership,r.market,next_node,10);
+    guard let active_claim=competing else let e=err_of(competing) { panic(e); }
+    assert(!active_claim.acquired && !active_claim.renewed && active_claim.node_id==r.node);
+
+    schema_exec(r.owner,"update market_owners set lease_until=clock_timestamp()-interval '1 second' where market_id=$1::uuid",[pg.arg_text(r.market)]);
+    let takeover=service.acquire(ownership,r.market,next_node,10);
+    guard let new_claim=takeover else let e=err_of(takeover) { panic(e); }
+    assert(new_claim.acquired && !new_claim.renewed && new_claim.epoch==2);
+
+    let stale_release=service.release(ownership,r.market,r.node,1);
+    guard let stale_released=stale_release else let e=err_of(stale_release) { panic(e); }
+    assert(!stale_released);
+
+    let no_markets: [str]=[];
+    let no_epochs: [int]=[];
+    let node_heartbeat=service.heartbeat(ownership,next_node,15,no_markets,no_epochs);
+    guard let live=node_heartbeat else let e=err_of(node_heartbeat) { panic(e); }
+    assert(live.node_live && len(live.markets)==0);
+    let market_heartbeat=service.heartbeat(ownership,next_node,15,[r.market],[2]);
+    guard let renewed=market_heartbeat else let e=err_of(market_heartbeat) { panic(e); }
+    assert(renewed.node_live && len(renewed.markets)==1);
+    assert(renewed.markets[0].market_id==r.market && renewed.markets[0].renewed);
+
+    schema_exec(r.owner,"update markets set owner_epoch=3 where id=$1::uuid",[pg.arg_text(r.market)]);
+    let mismatched_heartbeat=service.heartbeat(ownership,next_node,15,[r.market],[2]);
+    guard let mismatch= mismatched_heartbeat else let e=err_of(mismatched_heartbeat) { panic(e); }
+    assert(mismatch.node_live && len(mismatch.markets)==1 && !mismatch.markets[0].renewed);
+    let mismatched_claim=service.acquire(ownership,r.market,next_node,10);
+    if let _claim=mismatched_claim { panic("owner epoch mismatch was accepted"); }
+    else let e=err_of(mismatched_claim) { assert(e=="OWNER_EPOCH_MISMATCH",e); }
+    schema_exec(r.owner,"update markets set owner_epoch=2 where id=$1::uuid",[pg.arg_text(r.market)]);
+
+    let released=service.release(ownership,r.market,next_node,2);
+    guard let did_release=released else let e=err_of(released) { panic(e); }
+    assert(did_release);
+    let expired_release=service.release(ownership,r.market,next_node,2);
+    guard let did_expire=expired_release else let e=err_of(expired_release) { panic(e); }
+    assert(!did_expire);
     schema_close(r);
 }
