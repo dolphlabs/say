@@ -1,0 +1,93 @@
+name: Exchange correctness
+
+on:
+  pull_request:
+    paths: ['src/exchange/**', 'tools/**', 'bench/**', 'Makefile', '.github/workflows/exchange.yml']
+  push:
+    branches: [main]
+    paths: ['src/exchange/**', 'tools/**', 'bench/**', 'Makefile', '.github/workflows/exchange.yml']
+  workflow_dispatch:
+  schedule:
+    - cron: '13 1 * * *'
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  shards:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          count = 100 if os.environ['EVENT'] == 'schedule' else 1
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('value=' + json.dumps(list(range(count))) + '\n')
+          PY
+  verify:
+    needs: shards
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        shard: ${{ fromJSON(needs.shards.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SLANG_WORKERS: '4'
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: dolphlabs/slang
+          ref: b76e3fe3505bd4ab630e4210b2ea7f293634d781
+          path: .toolchain/slang
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.1'
+          cache: false
+      - name: Build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev
+          make -C .toolchain/slang slangc
+          echo "$GITHUB_WORKSPACE/.toolchain/slang" >> "$GITHUB_PATH"
+      - name: Build test drivers
+        run: make exchange-tools
+      - name: Unit and exact golden comparisons
+        if: matrix.shard == 0
+        run: |
+          slangc test src/exchange/domain
+          slangc test src/exchange/service
+          python3 -m unittest discover -s tools/oracle -v
+          go -C bench/go-ref test ./...
+          python3 tools/oracle/differential.py --binary bin/core-driver --commands 10000
+      - name: Reduced exhaustive alphabet through four commands
+        if: matrix.shard == 0
+        run: python3 tools/oracle/exhaustive.py --binary bin/core-parallel --alphabet reduced --depth 4
+      - name: Million-command differential shard
+        run: |
+          python3 tools/oracle/parallel.py --binary bin/core-parallel --commands 1000000 \
+            --trace-length 10000 --seed "$((874392 + SHARD))" --workers 4 \
+            --output "$RUNNER_TEMP/exchange-corpus" | tee differential.log
+          bin/go-ref --verify "$RUNNER_TEMP/exchange-corpus/manifest.json" | tee go-verify.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exchange-${{ matrix.shard }}
+          path: |
+            differential.log
+            go-verify.log
+            ${{ runner.temp }}/exchange-corpus/failure.json
+            ${{ runner.temp }}/exchange-corpus/failed-case.json
+          if-no-files-found: ignore

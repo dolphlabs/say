@@ -143,3 +143,40 @@ pub fn delete_key(c: Cache, key: str) -> result[bool, str] {
     }
     return err("no cache configured");
 }
+
+// Appends one entry to a Redis stream, trimmed to about `max_len` entries.
+// The in-memory cache keeps the last entry per id, for tests.
+pub fn xadd(c: Cache, stream: str, max_len: int, fields: [str]) -> result[bool, str] {
+    if let p = c.pool {
+        let d = deadline(2000000000);
+        let cr = redis.acquire(p, d);
+        guard let conn = cr else let e = err_of(cr) {
+            return err(e);
+        }
+        let args: [bytes] = [to_bytes("XADD"), to_bytes(stream), to_bytes("MAXLEN"), to_bytes("~"),
+                             to_bytes(to_str(max_len)), to_bytes("*")];
+        for f in fields {
+            push(args, to_bytes(f));
+        }
+        let r = redis.do(conn, args, d);
+        redis.release(p, conn);
+        guard let _reply = r else let e = err_of(r) {
+            return err(e);
+        }
+        return ok(true);
+    }
+    if let m = c.memory {
+        mutex_lock(m.lock);
+        let key = stream;
+        for i in 0..len(fields) {
+            if fields[i] == "id" && i + 1 < len(fields) {
+                key = stream + ":" + fields[i + 1];
+            }
+        }
+        m.data[key] = strings.join(fields, "\n");
+        m.expires[key] = time.wall() + 3600000000000;
+        mutex_unlock(m.lock);
+        return ok(true);
+    }
+    return err("no cache configured");
+}

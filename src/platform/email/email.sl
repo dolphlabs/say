@@ -19,28 +19,38 @@ pub gc struct MemorySender {
 }
 
 pub gc struct SendByteSender {
-    api_key: str
+    api_key: str,
+    url: str,
+    timeout_ns: int,
+    client: httpc.Client
 }
 
+// Exactly one of these is set. `console` prints the message, code included,
+// and settings refuse it outside the dev and test profiles.
 pub gc struct Email {
     sendbyte: opt[SendByteSender],
-    memory: opt[MemorySender]
+    memory: opt[MemorySender],
+    console: bool
 }
 
 pub fn in_memory() -> Email {
     let list: [EmailMessage] = [];
     let none_sb: opt[SendByteSender] = none;
-    return Email {
-        sendbyte: none_sb,
-        memory: some(MemorySender { lock: make_mutex(), sent: list })
-    };
+    return Email { sendbyte: none_sb, memory: some(MemorySender { lock: make_mutex(), sent: list }), console: false };
 }
 
-pub fn on_sendbyte(api_key: str) -> Email {
+pub fn on_console() -> Email {
+    let none_sb: opt[SendByteSender] = none;
+    let none_mem: opt[MemorySender] = none;
+    return Email { sendbyte: none_sb, memory: none_mem, console: true };
+}
+
+pub fn on_sendbyte(api_key: str, url: str, timeout_ns: int) -> Email {
     let none_mem: opt[MemorySender] = none;
     return Email {
-        sendbyte: some(SendByteSender { api_key: api_key }),
-        memory: none_mem
+        sendbyte: some(SendByteSender { api_key: api_key, url: url, timeout_ns: timeout_ns, client: httpc.new_client() }),
+        memory: none_mem,
+        console: false
     };
 }
 
@@ -50,6 +60,10 @@ pub fn send(e: Email, msg: EmailMessage) -> result[bool, str] {
     }
     if let m = e.memory {
         return memory_send(m, msg);
+    }
+    if e.console {
+        println("[email:dev] to " + strings.join(msg.to, ", ") + " | " + msg.subject + "\n" + msg.text);
+        return ok(true);
     }
     return err("no email sender configured");
 }
@@ -74,11 +88,6 @@ fn memory_send(m: MemorySender, msg: EmailMessage) -> result[bool, str] {
 }
 
 fn sendbyte_send(s: SendByteSender, msg: EmailMessage) -> result[bool, str] {
-    if s.api_key == "" {
-        println("[SendByte Dev] No API key configured. Email to " + strings.join(msg.to, ", ") + " with subject: " + msg.subject);
-        return ok(true);
-    }
-
     let to_arr = zokor.jarr();
     for recipient in msg.to {
         to_arr.add_str(recipient);
@@ -95,22 +104,17 @@ fn sendbyte_send(s: SendByteSender, msg: EmailMessage) -> result[bool, str] {
         .set_str("text", msg.text)
         .set("tags", tags_arr)
         .render();
-
-    let client = httpc.new_client();
-    let req = httpc.new_request("POST", "https://api.sendbyte.africa/v1/emails");
+    let req = httpc.new_request("POST", s.url);
     req.headers["Authorization"] = "Bearer " + s.api_key;
     req.headers["Content-Type"] = "application/json";
     req.body = builder.new_bytes().write_str(payload).finish();
-
-    let deadline = until_of(time.mono() + 10000000000); // 10 seconds
-    let r = httpc.client_send(client, req, deadline);
-    guard let resp = r else let err_str = err_of(r) {
-        return err("SendByte request failed: " + err_str);
+    req.max_redirects = 0;
+    let r = s.client.send(req, until_of(time.mono() + s.timeout_ns));
+    guard let resp = r else let e = err_of(r) {
+        return err("sendbyte request failed: " + e);
     }
     if resp.status < 200 || resp.status >= 300 {
-        let body_str = strings.from_bytes(resp.body, 0, len(resp.body));
-        let code_str = builder.new_str().write_int(resp.status).finish();
-        return err("SendByte returned status " + code_str + ": " + body_str);
+        return err("sendbyte returned status " + to_str(resp.status));
     }
     return ok(true);
 }

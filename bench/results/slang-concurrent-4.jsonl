@@ -1,0 +1,1 @@
+{"markets":1000,"cycles_per_market":100,"commands":200000,"elapsed_ns":3259645000,"commands_per_second":61356.4,"gc_allocations_including_harness":0,"native_allocation_calls_including_harness":932,"native_bytes_including_harness":233600,"memory_maps_including_harness":0,"checksum":2074480686619,"history_digest":"3eac13627bab81a33b7c26a05b35d0448adb24cc76c19c80e4c4d6ca48e29e6a"}

@@ -1,106 +1,70 @@
-import "crypto";
-import "encoding";
 import "http";
-import "jwt";
-import "strings";
-import "time";
 import "zokor";
 import "../app" as app;
 
-pub gc struct SessionClaims {
-    jti: str,
-    sub: str,
-    email: str,
-    username: str,
-    kind: str,
-    iat: int,
-    exp: int
+pub fn cookie_name() -> str {
+    return "say_session";
 }
 
-fn new_jti() -> str {
-    let rb = crypto.rand(16);
-    guard let b = rb else {
-        return "jti_" + inspect(time.wall());
+// The cookie first, then `Authorization: Bearer` for mobile clients.
+pub fn session_token(c: zokor.Ctx[app.App]) -> str {
+    let from_cookie = c.cookie(cookie_name());
+    if len(from_cookie) > 0 {
+        return from_cookie;
     }
-    return encoding.hex_encode(b);
+    return c.bearer();
 }
 
-pub fn require_tenant(c: zokor.Ctx[app.App]) -> opt[http.Response] {
-    guard let tenant_id = zokor.api_key_client(c, c.state.settings.api_keys) else {
-        return some(zokor.respond(c.errors, "unauthorized", c.request_id));
-    }
-    c.set_local("tenant_id", tenant_id);
-    return none;
-}
-
-pub fn issue_session_cookie(account_id: str, email: str, username: str, kind: str, jwt_auth: zokor.JwtAuth, cookie_keys: zokor.CookieKeys) -> result[zokor.Cookie, str] {
-    let now_s = time.wall() / 1000000000;
-    let max_age_s = 604800; // 7 days
-    let claims = SessionClaims {
-        jti: new_jti(),
-        sub: account_id,
-        email: email,
-        username: username,
-        kind: kind,
-        iat: now_s,
-        exp: now_s + max_age_s
-    };
-    let token_res = zokor.sign_token(claims, jwt_auth);
-    guard let token = token_res else let e = err_of(token_res) {
-        return err(e);
-    }
-    let c_res = zokor.signed_cookie("say_session", token, cookie_keys);
-    guard let c = c_res else let e = err_of(c_res) {
-        return err(e);
-    }
-    c.path = "/";
-    c.http_only = true;
-    c.same_site = zokor.SameSite.LAX;
-    c.max_age = max_age_s;
-    return ok(c);
-}
-
-pub fn current_session(c: zokor.Ctx[app.App]) -> opt[SessionClaims] {
-    let none_claims: opt[SessionClaims] = none;
-    let raw_opt = zokor.signed_value(c, "say_session", c.state.settings.cookie_keys);
-    let token = "";
-    if let t = raw_opt {
-        token = t;
-    } else {
-        let auth_hdr = c.header("authorization");
-        if strings.has_prefix(auth_hdr, "Bearer ") {
-            token = strings.trim(strings.slice(auth_hdr, 7, len(auth_hdr)));
-        }
-    }
-    if len(token) == 0 {
-        return none_claims;
-    }
-
-    let now_s = time.wall() / 1000000000;
-    let prob = zokor.token_problem(token, c.state.settings.jwt_auth, now_s);
-    if len(prob) > 0 {
-        return none_claims;
-    }
-    if len(c.state.settings.jwt_auth.keys) == 0 {
-        return none_claims;
-    }
-    let verified: result[SessionClaims, str] = jwt.verify(token, c.state.settings.jwt_auth.keys[0]);
-    guard let claims = verified else {
-        return none_claims;
-    }
-    if app.is_session_revoked(c.state, claims.jti) {
-        return none_claims;
-    }
-    return some(claims);
-}
-
+// Sets the locals account_id and session_hash for the handler.
 pub fn require_session(c: zokor.Ctx[app.App]) -> opt[http.Response] {
-    guard let claims = current_session(c) else {
-        return some(zokor.respond(c.errors, "unauthorized", c.request_id));
+    let r = app.authenticate(c.state, session_token(c));
+    guard let found = r else let e = err_of(r) {
+        c.state.settings.server.logger.error("auth", "session lookup failed: " + e);
+        return some(zokor.respond(c.errors, "UNAVAILABLE", c.request_id));
     }
-    c.set_local("account_id", claims.sub);
-    c.set_local("username", claims.username);
-    c.set_local("email", claims.email);
-    c.set_local("kind", claims.kind);
+    guard let caller = found else {
+        return some(zokor.respond(c.errors, "UNAUTHENTICATED", c.request_id));
+    }
+    c.set_local("account_id", caller.account_id);
+    c.set_local("session_hash", caller.session_hash);
     return none;
+}
+
+pub fn session_cookie(token: str, max_age_seconds: int) -> zokor.Cookie {
+    let ck = zokor.new_cookie(cookie_name(), token);
+    ck.path = "/";
+    ck.http_only = true;
+    ck.secure = true;
+    ck.same_site = zokor.SameSite.LAX;
+    ck.max_age = max_age_seconds;
+    return ck;
+}
+
+pub fn with_session(resp: http.Response, token: str) -> result[http.Response, str] {
+    return zokor.set_cookie(resp, session_cookie(token, 2592000));
+}
+
+pub fn without_session(resp: http.Response) -> http.Response {
+    return zokor.clear_cookie(resp, cookie_name(), "/", "") ?? resp;
+}
+
+fn require_role(c: zokor.Ctx[app.App], role: str) -> opt[http.Response] {
+    let r = app.has_role(c.state, c.local("account_id"), role);
+    guard let allowed = r else let e = err_of(r) {
+        c.state.settings.server.logger.error("auth", "role lookup failed: " + e);
+        return some(zokor.respond(c.errors, "UNAVAILABLE", c.request_id));
+    }
+    if !allowed {
+        return some(zokor.respond(c.errors, "FORBIDDEN", c.request_id));
+    }
+    return none;
+}
+
+// After require_session: the caller must hold the operator role.
+pub fn require_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
+    return require_role(c, "admin");
+}
+
+pub fn require_super_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
+    return require_role(c, "super_admin");
 }
