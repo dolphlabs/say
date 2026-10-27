@@ -19,6 +19,12 @@ pub fn render(v: zokor.ErrorView) -> http.Response {
             e.set_int("attempts_left", to_int(f.reason) ?? 0);
         } else if f.field == "signup_token" {
             e.set_str("signup_token", f.reason);
+        } else if f.field == "__validation" {
+            let parsed = zokor.parse(f.reason);
+            if let problem = parsed {
+                fields.add(problem);
+                field_count += 1;
+            }
         } else {
             fields.add(zokor.jobj().set_str("field", f.field).set_str("reason", f.reason));
             field_count += 1;

@@ -61,7 +61,7 @@ gc struct PublishArg {
 fn publish_tx(c: pg.Conn, a: PublishArg) -> result[int, str] {
     let d = until_of(time.mono() + a.timeout);
     let r: result[[OutboxEvent], str] = zokor.conn_query_all(c,
-        "select id::text as id, type, payload::text as payload from outbox_events where published_at is null " +
+        "select id::text as id, type, payload::text as payload from outbox_events where audience='legacy' and published_at is null " +
         "order by created_at limit $1 for update skip locked", [pg.arg_int(a.limit)], d);
     guard let events = r else let e = err_of(r) {
         return err(e);

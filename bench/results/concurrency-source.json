@@ -1,0 +1,4 @@
+{
+  "bench/slang/concurrent/main.sl": "0a5de9a298860d06b831ef936faea39f4249a8d62930fa7cfd027dccf8e09a7b",
+  "bench/go-ref/concurrent.go": "543a648d3a4876f659e8fd9db6adc50ba601cc0f66b7e5bd697f8da234bcd1c3"
+}

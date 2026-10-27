@@ -45,3 +45,29 @@ load:
 check:
 	$(ZOKOR) check
 	$(MAKE) test build
+
+GO ?= go
+EXCHANGE_FUZZ_COMMANDS ?= 1000000
+EXCHANGE_SEED ?= 874392
+
+.PHONY: exchange-tools test-exchange test-exchange-smoke bench-exchange
+
+exchange-tools:
+	mkdir -p bin
+	$(SLANGC) tools/core/main.sl -o bin/core-driver
+	$(SLANGC) tools/core/parallel/main.sl -o bin/core-parallel
+	$(GO) -C bench/go-ref build -o ../../bin/go-ref .
+
+test-exchange-smoke: exchange-tools
+	$(SLANGC) test src/exchange/domain
+	$(SLANGC) test src/exchange/service
+	python3 -m unittest discover -s tools/oracle -v
+	$(GO) -C bench/go-ref test ./...
+	python3 tools/oracle/differential.py --binary bin/core-driver --commands 10000
+
+test-exchange: test-exchange-smoke
+	python3 tools/oracle/exhaustive.py --binary bin/core-parallel --alphabet reduced --depth 4
+	python3 tools/oracle/parallel.py --binary bin/core-parallel --commands $(EXCHANGE_FUZZ_COMMANDS) --seed $(EXCHANGE_SEED) --trace-length 10000
+
+bench-exchange:
+	python3 bench/run.py --go $(GO)

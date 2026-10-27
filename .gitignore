@@ -2,6 +2,8 @@
 /bin/
 main
 *.gen.c
+__pycache__/
+*.pyc
 # local configuration: copy .env.example to .env
 .env
 .env.*
@@ -10,3 +12,4 @@ main
 # load test output
 loadtest/server.log
 loadtest/last-run.txt
+.toolchain/

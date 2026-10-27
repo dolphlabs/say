@@ -14,6 +14,9 @@ import "../../accounts/service" as accounts;
 import "../../accounts/store" as accounts_store;
 import "../../ledger/service" as ledger;
 import "../../ledger/store" as ledger_store;
+import "../../markets/service" as markets;
+import "../../markets/store" as markets_store;
+// zokor:imports
 
 pub gc struct Postman {
     email: email.Email,
@@ -21,6 +24,8 @@ pub gc struct Postman {
 }
 
 pub gc struct App {
+    markets: markets.Markets[markets_store.Store],
+    // zokor:fields
     accounts: accounts.Auth[accounts_store.Store],
     ledger: ledger.Ledger[ledger_store.Postgres],
     mailer: accounts.Mailer[Postman],
@@ -107,9 +112,17 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     lcfg.recon_every_ns = s.ledger.recon_every_ns;
     let lst = ledger_store.new_postgres(pool, c.pool, s.auth.pg_timeout_ns, s.auth.redis_timeout_ns);
     let hasher = accounts.new_hasher(s.auth.hash_workers, s.auth.hash_queue, accounts.argon_hash, accounts.argon_verify);
+    let clock=timez.system_clock();
+    let registry=markets.new_markets(markets_store.on_postgres(d.pool,s.auth.pg_timeout_ns,lst,zone),new_uuid,clock);
+    registry.snapshot_every_ns=s.markets.snapshot_every_ns;
+    registry.close_poll_ns=s.markets.close_poll_ns;
+    registry.close_workers=s.markets.close_workers;
+    registry.history_generations=s.markets.history_generations;
     return ok(App {
+        markets: registry,
+        // zokor:build
         accounts: accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid),
-        ledger: ledger.new_ledger(ledger_store.ledger_store(lst), lcfg, timez.system_clock()),
+        ledger: ledger.new_ledger(ledger_store.ledger_store(lst), lcfg, clock),
         mailer: mailer_on(mail, s.email.from),
         settings: s,
         metrics: metrics.new_registry(),
@@ -125,11 +138,18 @@ pub fn build(s: config.Settings, d: db.Db, c: cache.Cache) -> result[App, str] {
 // The full stack on the given Postgres and Redis (none: Redis is down),
 // with mail captured in memory.
 pub fn for_tests(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> result[App, str] {
+    // zokor:test_build
     return wire(s, d, c, mail);
 }
 
 pub fn current_season_end(a: App) -> result[opt[timez.Time], str] {
     return ledger.current_season_end(a.ledger);
+}
+
+pub fn market_roles(a: App, id: str) -> result[[str], str] {
+    let r = accounts.roles_of(a.accounts,id);
+    guard let roles = r else let f = err_of(r) { return err(f.detail); }
+    return ok(roles);
 }
 
 // Who a session token belongs to, in terms platform/auth can carry
@@ -252,6 +272,9 @@ pub fn start_ledger_workers(a: App) {
 // row sweeper and, when Google is configured, the JWKS refresher.
 pub fn start_workers(a: App) {
     start_ledger_workers(a);
+    spawn markets.run_snapshots(a.markets);
+    spawn markets.run_scheduler(a.markets);
+    spawn drain_market_signals(a);
     spawn drain_problems(a);
     spawn accounts.run_audit_writer(a.accounts);
     spawn accounts.run_outbox_worker(a.accounts, a.mailer, 5000);
@@ -259,4 +282,13 @@ pub fn start_workers(a: App) {
     if len(a.settings.auth.google_client_id) > 0 {
         spawn accounts.run_jwks_refresher(a.accounts);
     }
+}
+
+fn drain_market_signals(a: App) -> int {
+    while true {
+        let got=chan_recv(a.markets.problems);
+        guard let message=got else { return 0; }
+        a.settings.server.logger.warn("markets",message);
+    }
+    return 0;
 }

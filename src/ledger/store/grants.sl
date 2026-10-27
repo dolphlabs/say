@@ -5,6 +5,7 @@ import "timez";
 import "zokor";
 import "../domain" as domain;
 import "../service" as service;
+import "../../approvals/store" as approvals;
 
 gc struct PolicyRow {
     id: str,
@@ -484,6 +485,17 @@ gc struct PolicyViewRow {
     approvals: str
 }
 
+gc struct PolicyHashRow { hash: str }
+gc struct NowRow { now: int }
+gc struct VoteCountRow { n: int }
+gc struct VoteExistsRow { present: bool }
+gc struct PolicyArg { amount: int, cap: int, operator: str, timeout: int }
+gc struct ApproveArg {
+    policy_id: str,
+    operator: str,
+    timeout: int
+}
+
 fn to_view(r: PolicyViewRow) -> service.PolicyView {
     let approvals: [str] = [];
     if len(r.approvals) > 0 {
@@ -497,95 +509,157 @@ fn is_operator_sql() -> str {
     return "select count(*)::bigint as n from account_roles where account_id = $1::uuid and role in ('admin', 'super_admin')";
 }
 
-fn st_policy_propose(p: Postgres, amount: int, cap: int, operator: str) -> result[str, str] {
-    let r: result[[IdRow], str] = zokor.query_all(p.pool,
+fn database_now(c: pg.Conn, d: until) -> result[int, str] {
+    let args: [pg.Arg] = [];
+    let r: result[[NowRow], str] = zokor.conn_query_all(c,
+        "select (extract(epoch from clock_timestamp())*1000)::bigint as now",args,d);
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    return ok(rows[0].now);
+}
+
+fn policy_view(c: pg.Conn, policy_id: str, d: until) -> result[service.PolicyView, str] {
+    let r: result[[PolicyViewRow], str] = zokor.conn_query_all(c,
+        "select p.id::text as id,p.amount,p.season_cap,p.status,p.proposed_by::text as proposed_by," +
+        "coalesce((select string_agg(v.operator_id,',' order by v.approved_at,v.operator_id) from (" +
+        "select a.operator_id::text as operator_id,a.approved_at from issuance_policy_approvals a where a.policy_id=p.id " +
+        "union all select d.decided_by::text as operator_id,d.decided_at as approved_at " +
+        "from approval_requests r join approval_decisions d on d.approval_id=r.id " +
+        "where r.kind='issuance_policy' and r.subject_id=p.id and r.payload_hash=issuance_policy_payload_hash(p.id) " +
+        "and d.decision='approved') v),'') as approvals from issuance_policies p where p.id=$1::uuid",
+        [pg.arg_text(policy_id)],d);
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    if len(rows) == 0 { return err("no policy " + policy_id); }
+    return ok(to_view(rows[0]));
+}
+
+fn policy_vote_count(c: pg.Conn, policy_id: str, hash: str, requester: str, d: until) -> result[int, str] {
+    let r: result[[VoteCountRow], str] = zokor.conn_query_all(c,
+        "select count(*)::bigint as n from (" +
+        "select a.operator_id from issuance_policy_approvals a where a.policy_id=$1::uuid and a.operator_id<>$3::uuid " +
+        "union select d.decided_by from approval_requests r join approval_decisions d on d.approval_id=r.id " +
+        "where r.kind='issuance_policy' and r.subject_id=$1::uuid and r.payload_hash=$2 and d.decision='approved' " +
+        "and d.decided_by<>$3::uuid) votes",
+        [pg.arg_text(policy_id),pg.arg_text(hash),pg.arg_text(requester)],d);
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    return ok(rows[0].n);
+}
+
+fn policy_actor_voted(c: pg.Conn, policy_id: str, hash: str, actor: str, d: until) -> result[bool, str] {
+    let r: result[[VoteExistsRow], str] = zokor.conn_query_all(c,
+        "select exists(select 1 from issuance_policy_approvals a where a.policy_id=$1::uuid and a.operator_id=$3::uuid " +
+        "union select 1 from approval_requests r join approval_decisions d on d.approval_id=r.id " +
+        "where r.kind='issuance_policy' and r.subject_id=$1::uuid and r.payload_hash=$2 and d.decided_by=$3::uuid) as present",
+        [pg.arg_text(policy_id),pg.arg_text(hash),pg.arg_text(actor)],d);
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    return ok(rows[0].present);
+}
+
+fn propose_tx(c: pg.Conn, a: PolicyArg) -> result[str, str] {
+    let d = until_of(time.mono() + a.timeout);
+    let orr: result[[CountRow], str] = zokor.conn_query_all(c,is_operator_sql(),[pg.arg_text(a.operator)],d);
+    guard let ops = orr else let e = err_of(orr) { return err(e); }
+    if ops[0].n == 0 { return err("operator " + a.operator + " has no admin role"); }
+    let r: result[[IdRow], str] = zokor.conn_query_all(c,
         "insert into issuance_policies (amount, season_cap, status, proposed_by) " +
         "select $1, $2, 'PROPOSED', $3::uuid " +
         "where exists (select 1 from account_roles where account_id = $3::uuid and role in ('admin', 'super_admin')) " +
         "returning id::text as id",
-        [pg.arg_int(amount), pg.arg_int(cap), pg.arg_text(operator)], deadline(p));
+        [pg.arg_int(a.amount), pg.arg_int(a.cap), pg.arg_text(a.operator)],d);
     guard let rows = r else let e = err_of(r) {
         return err(e);
     }
     if len(rows) == 0 {
-        return err("operator " + operator + " has no admin role");
+        return err("operator " + a.operator + " has no admin role");
+    }
+    let hash_result: result[[PolicyHashRow], str] = zokor.conn_query_all(c,
+        "select issuance_policy_payload_hash($1::uuid) as hash",[pg.arg_text(rows[0].id)],d);
+    guard let hashes = hash_result else let e = err_of(hash_result) { return err(e); }
+    let nr = database_now(c,d);
+    guard let now = nr else let e = err_of(nr) { return err(e); }
+    for slot in [1,2] {
+        let requested = approvals.request(c,"issuance_policy","issuance_policy",rows[0].id,hashes[0].hash,
+            a.operator,1,slot,"Approve issuance policy",now,d);
+        guard let _request_id = requested else let e = err_of(requested) { return err(e); }
     }
     return ok(rows[0].id);
 }
 
-gc struct ApproveArg {
-    policy_id: str,
-    operator: str,
-    timeout: int
-}
-
-// Two distinct operators make a policy APPROVED; it replaces the previous
-// one. A live season whose rollover halted for want of a policy runs again.
 fn approve_tx(c: pg.Conn, a: ApproveArg) -> result[service.PolicyView, str] {
     let d = until_of(time.mono() + a.timeout);
-    let orr: result[[CountRow], str] = zokor.conn_query_all(c, is_operator_sql(), [pg.arg_text(a.operator)], d);
-    guard let ops = orr else let e = err_of(orr) {
-        return err(e);
-    }
+    let orr: result[[CountRow], str] = zokor.conn_query_all(c,
+        "select count(*)::bigint as n from account_roles where account_id=$1::uuid and role='super_admin'",
+        [pg.arg_text(a.operator)],d);
+    guard let ops = orr else let e = err_of(orr) { return err(e); }
     if ops[0].n == 0 {
-        return err("operator " + a.operator + " has no admin role");
+        return err("operator " + a.operator + " has no super_admin role");
     }
-    let sr: result[[StatusRow], str] = zokor.conn_query_all(c,
-        "select status from issuance_policies where id = $1::uuid for update", [pg.arg_text(a.policy_id)], d);
-    guard let st = sr else let e = err_of(sr) {
-        return err(e);
-    }
+    let sr: result[[PolicyViewRow], str] = zokor.conn_query_all(c,
+        "select p.id::text as id,p.amount,p.season_cap,p.status,p.proposed_by::text as proposed_by,coalesce((select string_agg(v.operator_id,',' order by v.approved_at,v.operator_id) from (select a.operator_id::text as operator_id,a.approved_at from issuance_policy_approvals a where a.policy_id=p.id union all select d.decided_by::text as operator_id,d.decided_at as approved_at from approval_requests r join approval_decisions d on d.approval_id=r.id where r.kind='issuance_policy' and r.subject_id=p.id and r.payload_hash=issuance_policy_payload_hash(p.id) and d.decision='approved') v),'') as approvals from issuance_policies p where p.id=$1::uuid for update",
+        [pg.arg_text(a.policy_id)],d);
+    guard let st = sr else let e = err_of(sr) { return err(e); }
     if len(st) == 0 {
         return err("no policy " + a.policy_id);
     }
+    let hash_result: result[[PolicyHashRow], str] = zokor.conn_query_all(c,
+        "select issuance_policy_payload_hash($1::uuid) as hash",[pg.arg_text(a.policy_id)],d);
+    guard let hashes = hash_result else let e = err_of(hash_result) { return err(e); }
+    if a.operator == st[0].proposed_by {
+        return err("SELF_APPROVAL_FORBIDDEN");
+    }
+    let voted = policy_actor_voted(c,a.policy_id,hashes[0].hash,a.operator,d);
+    guard let already_voted = voted else let e = err_of(voted) { return err(e); }
+    if already_voted { return ok(to_view(st[0])); }
     if st[0].status != "PROPOSED" {
         return err("policy " + a.policy_id + " is " + st[0].status);
     }
-    let ir = exec(c, "insert into issuance_policy_approvals (policy_id, operator_id) values ($1::uuid, $2::uuid) " +
-                     "on conflict do nothing", [pg.arg_text(a.policy_id), pg.arg_text(a.operator)], d);
-    guard let _i = ir else let e = err_of(ir) {
-        return err(e);
-    }
-    let ar = exec(c, "insert into audit_events (actor_id, action, target_type, target_id, detail) " +
-                     "values ($1::uuid, 'issuance_policy.approve', 'issuance_policy', $2, '{}'::jsonb)",
-                  [pg.arg_text(a.operator), pg.arg_text(a.policy_id)], d);
-    guard let _a = ar else let e = err_of(ar) {
-        return err(e);
-    }
-    let cr: result[[CountRow], str] = zokor.conn_query_all(c,
-        "select count(*)::bigint as n from issuance_policy_approvals where policy_id = $1::uuid", [pg.arg_text(a.policy_id)], d);
-    guard let counts = cr else let e = err_of(cr) {
-        return err(e);
-    }
-    if counts[0].n >= 2 {
+    let pr = approvals.pending(c,"issuance_policy",a.policy_id,hashes[0].hash,d);
+    guard let pending = pr else let e = err_of(pr) { return err(e); }
+    guard let request = pending else { return err("STALE_APPROVAL"); }
+    let nr = database_now(c,d);
+    guard let now = nr else let e = err_of(nr) { return err(e); }
+    let decided = approvals.decide(c,request,a.operator,"approved","",now,d);
+    guard let _decision = decided else let e = err_of(decided) { return err(e); }
+    let ar = exec(c,
+        "insert into audit_events(actor_id,action,target_type,target_id,detail) " +
+        "values($1::uuid,'issuance_policy.approve','issuance_policy',$2,$3::jsonb)",
+        [pg.arg_text(a.operator),pg.arg_text(a.policy_id),
+         pg.arg_text(zokor.jobj().set_str("approval_id",request.id).set_str("payload_hash",hashes[0].hash).render())],d);
+    guard let _a = ar else let e = err_of(ar) { return err(e); }
+    let count_result = policy_vote_count(c,a.policy_id,hashes[0].hash,st[0].proposed_by,d);
+    guard let votes = count_result else let e = err_of(count_result) { return err(e); }
+    if votes >= 2 {
         let none_args: [pg.Arg] = [];
-        let rr = exec(c, "update issuance_policies set status = 'REVOKED', revoked_at = now() where status = 'APPROVED'",
-                      none_args, d);
-        guard let _r = rr else let e = err_of(rr) {
-            return err(e);
-        }
-        let ur = exec(c, "update issuance_policies set status = 'APPROVED', approved_at = now() where id = $1::uuid",
-                      [pg.arg_text(a.policy_id)], d);
-        guard let _u = ur else let e = err_of(ur) {
-            return err(e);
-        }
+        let rr = exec(c,"update issuance_policies set status='REVOKED',revoked_at=now() where status='APPROVED'",
+                      none_args,d);
+        guard let _r = rr else let e = err_of(rr) { return err(e); }
+        let ur = exec(c,
+            "update issuance_policies set status='APPROVED',approved_at=now() where id=$1::uuid and status='PROPOSED'",
+            [pg.arg_text(a.policy_id)],d);
+        guard let _u = ur else let e = err_of(ur) { return err(e); }
         let gr = exec(c,
-            "update grant_runs g set finished_at = null, halted_reason = null, last_account_id = null " +
-            "from seasons s where s.id = g.season_id and s.status = 'ACTIVE' and g.halted_reason is not null",
-            none_args, d);
-        guard let _g = gr else let e = err_of(gr) {
-            return err(e);
-        }
+            "update grant_runs g set finished_at=null,halted_reason=null,last_account_id=null " +
+            "from seasons s where s.id=g.season_id and s.status='ACTIVE' and g.halted_reason is not null",
+            none_args,d);
+        guard let _g = gr else let e = err_of(gr) { return err(e); }
+        let applied = exec(c,
+            "insert into approval_applications(approval_id,subject_id,applied_at) " +
+            "select r.id,r.subject_id,now() from approval_requests r join approval_state s on s.approval_id=r.id " +
+            "where r.kind='issuance_policy' and r.subject_id=$1::uuid and r.payload_hash=$2 and s.status='approved' " +
+            "on conflict(approval_id) do nothing",
+            [pg.arg_text(a.policy_id),pg.arg_text(hashes[0].hash)],d);
+        guard let _applied = applied else let e = err_of(applied) { return err(e); }
+        let emitted = exec(c,
+            "insert into outbox_events(type,payload,created_at) " +
+            "values('issuance_policy.approved',$1::jsonb,now())",
+            [pg.arg_text(zokor.jobj().set_str("policy_id",a.policy_id).set_str("payload_hash",hashes[0].hash).render())],d);
+        guard let _event = emitted else let e = err_of(emitted) { return err(e); }
     }
-    let vr: result[[PolicyViewRow], str] = zokor.conn_query_all(c,
-        "select p.id::text as id, p.amount, p.season_cap, p.status, p.proposed_by::text as proposed_by, " +
-        "coalesce((select string_agg(a.operator_id::text, ',' order by a.approved_at) " +
-        "from issuance_policy_approvals a where a.policy_id = p.id), '') as approvals from issuance_policies p " +
-        "where p.id = $1::uuid", [pg.arg_text(a.policy_id)], d);
-    guard let views = vr else let e = err_of(vr) {
-        return err(e);
-    }
-    return ok(to_view(views[0]));
+    return policy_view(c,a.policy_id,d);
+}
+
+fn st_policy_propose(p: Postgres, amount: int, cap: int, operator: str) -> result[str, str] {
+    return zokor.transaction(p.pool,PolicyArg { amount: amount,cap: cap,operator: operator,timeout: p.timeout },
+        propose_tx,until_of(time.mono()+p.timeout));
 }
 
 fn st_policy_approve(p: Postgres, policy_id: str, operator: str) -> result[service.PolicyView, str] {
@@ -596,10 +670,8 @@ fn st_policy_approve(p: Postgres, policy_id: str, operator: str) -> result[servi
 fn st_policies(p: Postgres) -> result[[service.PolicyView], str] {
     let none_args: [pg.Arg] = [];
     let r: result[[PolicyViewRow], str] = zokor.query_all(p.pool,
-        "select p.id::text as id, p.amount, p.season_cap, p.status, p.proposed_by::text as proposed_by, " +
-        "coalesce((select string_agg(a.operator_id::text, ',' order by a.approved_at) " +
-        "from issuance_policy_approvals a where a.policy_id = p.id), '') as approvals from issuance_policies p " +
-        "order by p.created_at desc", none_args, deadline(p));
+        "select p.id::text as id,p.amount,p.season_cap,p.status,p.proposed_by::text as proposed_by,coalesce((select string_agg(v.operator_id,',' order by v.approved_at,v.operator_id) from (select a.operator_id::text as operator_id,a.approved_at from issuance_policy_approvals a where a.policy_id=p.id union all select d.decided_by::text as operator_id,d.decided_at as approved_at from approval_requests r join approval_decisions d on d.approval_id=r.id where r.kind='issuance_policy' and r.subject_id=p.id and r.payload_hash=issuance_policy_payload_hash(p.id) and d.decision='approved') v),'') as approvals from issuance_policies p order by p.created_at desc",
+        none_args, deadline(p));
     guard let rows = r else let e = err_of(r) {
         return err(e);
     }

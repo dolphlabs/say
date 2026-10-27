@@ -134,6 +134,12 @@ fn new_user(e: Env) -> str {
 
 fn new_operator(e: Env) -> str {
     let id = new_user(e);
+    run_args(e.app, "insert into account_roles (account_id, role) values ($1::uuid, 'super_admin')", [pg.arg_text(id)]);
+    return id;
+}
+
+fn new_admin(e: Env) -> str {
+    let id = new_user(e);
     run_args(e.app, "insert into account_roles (account_id, role) values ($1::uuid, 'admin')", [pg.arg_text(id)]);
     return id;
 }
@@ -146,14 +152,22 @@ fn run_args(pool: pg.Pool, sql: str, args: [pg.Arg]) {
 fn approve(e: Env, amount: int, cap: int) -> str {
     let a = new_operator(e);
     let b = new_operator(e);
+    let c = new_operator(e);
     let pr = st_policy_propose(e.store, amount, cap, a);
     guard let id = pr else let x = err_of(pr) { panic(x); }
-    let r1 = st_policy_approve(e.store, id, a);
+    let r1 = st_policy_approve(e.store, id, b);
     guard let v1 = r1 else let x = err_of(r1) { panic(x); }
     assert(v1.status == "PROPOSED", inspect(v1));
-    let r2 = st_policy_approve(e.store, id, b);
+    assert(len(v1.approvals) == 1, inspect(v1));
+    let r2 = st_policy_approve(e.store, id, c);
     guard let v2 = r2 else let x = err_of(r2) { panic(x); }
-    assert(v2.status == "APPROVED", inspect(v2));
+    assert(v2.status == "APPROVED" && len(v2.approvals) == 2, inspect(v2));
+    assert(int_of(e.app,
+        "select count(*)::bigint as n from approval_requests where kind='issuance_policy' and subject_id=$1::uuid",
+        [pg.arg_text(id)]) == 2);
+    assert(int_of(e.app,
+        "select count(*)::bigint as n from approval_applications where subject_id=$1::uuid",
+        [pg.arg_text(id)]) == 2);
     return id;
 }
 
@@ -417,8 +431,18 @@ fn test_should_not_grant_without_an_approved_policy() {
     let op = new_operator(e);
     let pr = st_policy_propose(e.store, 1000, 5000, op);
     guard let id = pr else let x = err_of(pr) { panic(x); }
-    let _a1 = st_policy_approve(e.store, id, op);
-    let again = st_policy_approve(e.store, id, op);
+    let self_vote = st_policy_approve(e.store, id, op);
+    if let _v = self_vote { panic("policy proposer approved their own policy"); }
+    let admin = new_admin(e);
+    let admin_vote = st_policy_approve(e.store, id, admin);
+    if let _v = admin_vote { panic("non-super-admin approved an issuance policy"); }
+    let voter = new_operator(e);
+    let legacy_write = pg.pool_query(e.app,
+        "insert into issuance_policy_approvals(policy_id,operator_id) values($1::uuid,$2::uuid)",
+        [pg.arg_text(id),pg.arg_text(voter)],dl());
+    if let _rows = legacy_write { panic("legacy issuance approvals remained writable"); }
+    let _a1 = st_policy_approve(e.store, id, voter);
+    let again = st_policy_approve(e.store, id, voter);
     guard let v = again else let x = err_of(again) { panic(x); }
     assert(v.status == "PROPOSED" && len(v.approvals) == 1, "one operator approved twice: " + inspect(v));
     let stranger = new_user(e);

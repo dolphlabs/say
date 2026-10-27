@@ -35,6 +35,13 @@ pub gc struct LedgerSettings {
     metrics_token: str
 }
 
+pub gc struct MarketSettings {
+    snapshot_every_ns: int,
+    close_poll_ns: int,
+    close_workers: int,
+    history_generations: int
+}
+
 pub gc struct Settings {
     service_name: str,
     profile: str,
@@ -50,7 +57,8 @@ pub gc struct Settings {
     timezone: str,
     auth: AuthSettings,
     email: EmailSettings,
-    ledger: LedgerSettings
+    ledger: LedgerSettings,
+    markets: MarketSettings
 }
 
 fn default_reserved() -> str {
@@ -120,6 +128,14 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
     if len(metrics_token) > 0 && len(metrics_token) < 16 {
         note(cfg, "METRICS_TOKEN", "must be at least 16 characters, or unset to turn /metrics off");
     }
+    let market_workers=zokor.int_or(cfg,"MARKET_CLOSE_WORKERS",8);
+    let snapshot_every=zokor.duration_or(cfg,"MARKET_SNAPSHOT_EVERY",1800000000);
+    let close_poll=zokor.duration_or(cfg,"MARKET_CLOSE_POLL",100000000);
+    let generations=zokor.int_or(cfg,"MARKET_SNAPSHOT_GENERATIONS",32);
+    if market_workers<1 || market_workers>32 { note(cfg,"MARKET_CLOSE_WORKERS","must be 1–32"); }
+    if snapshot_every<100000000 || snapshot_every>2000000000 { note(cfg,"MARKET_SNAPSHOT_EVERY","must be 100ms–2s"); }
+    if close_poll<10000000 || close_poll>1000000000 { note(cfg,"MARKET_CLOSE_POLL","must be 10ms–1s"); }
+    if generations<2 || generations>128 { note(cfg,"MARKET_SNAPSHOT_GENERATIONS","must be 2–128"); }
 
     return Settings {
         service_name: zokor.str_or(cfg, "SERVICE_NAME", "say"),
@@ -163,6 +179,7 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
             grant_chunk: zokor.int_or(cfg, "GRANT_CHUNK", 500),
             recon_every_ns: zokor.duration_or(cfg, "RECON_EVERY", 300000000000),
             metrics_token: metrics_token
-        }
+        },
+        markets: MarketSettings { snapshot_every_ns:snapshot_every,close_poll_ns:close_poll,close_workers:market_workers,history_generations:generations }
     };
 }

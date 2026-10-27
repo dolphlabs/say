@@ -130,7 +130,7 @@ issuance_policies (
 )
 UNIQUE INDEX issuance_policies_one_approved ON issuance_policies ((true)) WHERE status = 'APPROVED'
 
-issuance_policy_approvals (
+issuance_policy_approvals (legacy history, read-only after migration 009)
   policy_id     uuid REFERENCES issuance_policies(id),
   operator_id   uuid REFERENCES accounts(id),
   approved_at   timestamptz NOT NULL DEFAULT now(),
@@ -138,12 +138,16 @@ issuance_policy_approvals (
 )
 ```
 
-- **Approval** takes two distinct operators with the `admin` or
-  `super_admin` role in `account_roles`. The proposer may be one of them.
-  The second approval flips the policy to APPROVED and revokes the previous
-  one in the same transaction.
+- **Approval** uses two immutable requests in the shared approvals workflow,
+  bound to the policy's canonical payload hash. Two distinct `super_admin`
+  accounts other than the proposer must approve. The second approval flips
+  the policy to APPROVED and revokes the previous one in the same transaction.
+  Migration 009 preserves legacy votes in their original table, excludes
+  proposer self-votes from the threshold, and resumes eligible pending policies
+  without fabricating historical request or decision timestamps.
 - **The CLI** is `bin/say admin issuance-policy propose|approve|show`
-  (decision D6). Each approval writes an `audit_events` row.
+  (decision D6). Decisions are recorded in shared append-only approval facts
+  and `audit_events`; the old approvals table is retained for read-only history.
 - **Fail-closed.** `grant_season_allowance` and the rollover job read the
   single APPROVED policy. Without one they fail with `PolicyMissing`, and
   the rollover job raises an alert and retries next tick.
