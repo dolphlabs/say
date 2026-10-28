@@ -1,11 +1,13 @@
 # Portfolio and notifications
 
-Status: **proposed; awaiting review**. Date: 2026-10-26.
+Status: **submitted for review**. Date: 2026-10-28.
 
-This is prompt 07's design deliverable, covering valuation, read models,
-notifications and empty/edge states. Review precedes migrations, endpoints,
-shared JSON vectors, client additions and tests. No portfolio, notification
-delivery or prerequisite exchange implementation is claimed here.
+This is prompt 07's design deliverable, covering valuation rules (§1),
+portfolio read models and APIs (§2), notifications and email fan-out (§3),
+and empty states/edge cases/client additions (§4). Prompts 03 (markets),
+04 (matching core), 05 (exchange runtime), and 06 (stream live feed) are now
+fully implemented on `feat/ledger`. Review precedes migrations, endpoints,
+shared JSON vectors, client additions and tests.
 
 ## 0. PRD and existing project
 
@@ -34,9 +36,14 @@ not claim visual parity or a built Portfolio screen from this document.
 
 ### Inspected sources and dependencies
 
-- Auth and ledger are implemented; prompts 03–06 remain proposed designs.
-  There are no positions/market_stats tables, runtime events, live gateway
-  or packages/say-stream implementation yet.
+- Auth, ledger, markets, core matching, exchange runtime, and the live stream feed
+  (prompts 01–06) are implemented on `feat/ledger`.
+- Runtime `positions`, `orders`, `fills`, and `market_stats` are active; outbox
+  publishers push private events to `stream:private:{shard}`.
+- `packages/say-stream` client library is built with 19 passing unit tests.
+- Prompt 07 creates the `position_results`, `notifications`, `notification_prefs`,
+  and `fanout_jobs` tables, builds the portfolio/notifications read endpoints, and
+  wires the 4-worker fanout pipeline and schedulers.
 - `src/ledger/store/reads.sl` already reads available/held/starting_grant by
   season and builds ledger pages; server exposes /v1/me/balance, /ledger
   and a small /summary. That summary is not the proposed portfolio summary.
