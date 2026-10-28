@@ -1,10 +1,10 @@
 # Live feed: gateway protocol and recovery design
 
-Status: **approved; client implementation underway**. Date: 2026-10-27.
+Status: **Ready for review**. Date: 2026-10-28.
 
-This is prompt 06's approved design. Implementation is in progress. No
-WebSocket gateway, exchange runtime or stream delivery is claimed as
-implemented by this document.
+This is prompt 06's design document (§1–§5). Following prompt 06 ground rules,
+this design is presented for review before implementing the server gateway,
+runtime stream updates, and fault/load harnesses.
 
 ## 0. PRD, dependency state and verified framework
 
@@ -29,15 +29,13 @@ subscription or resync is not an order-admission request. PostgreSQL remains
 authoritative for money/authentication; Redis and all gateway book copies
 can be rebuilt.
 
-Current workspace has implemented auth, ledger, market-registry routes and
-the pure matching core. A TypeScript client package is being implemented;
-there is no WebSocket gateway or stream delivery yet. The exchange runtime
-is still incomplete: there are no market streams or BookView services for a
-gateway to consume. The platform publisher sends outbox rows to say:events,
-but the exchange events and sharded private-stream publishing described
-below are not wired. Auth does **not** yet publish session.revoked. Approved
-server prerequisites still need implementation and tests; no fake completed
-backend is assumed.
+Current workspace state:
+- Prompt 01 (Auth), Prompt 02 (Ledger), Prompt 03 (Market Registry), Prompt 04 (Matching Core), and Prompt 05 (Exchange Runtime) are complete.
+- The exchange runtime provides in-memory `BookView` cells on the owning node, durable admission and cancel enqueue, transactional commit of ledger postings/projections/outbox events, and recovery replay.
+- The platform outbox publisher in `src/platform/db/outbox.sl` claims and publishes ordered runtime events to `stream:market:{id}` and `stream:account:{account}`. For Prompt 06, we will add 64 sharded streams (`stream:private:{hash(account) % 64}`) to scale private reads without per-account `XREAD` loops, and wire `session.revoked` outbox events on logout, logout-everywhere, and password reset.
+- The TypeScript client package `packages/say-stream` has its initial core implementation passing 19 unit tests (`make test-stream`).
+- The WebSocket gateway will be implemented in `src/stream/{domain,service,store,server}` following the layout and layering rules.
+
 
 Use `src/stream/{domain,service,store,server}`. Domain contains pure protocol,
 merge and cursor rules; service owns hubs/subscription/buffer orchestration

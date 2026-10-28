@@ -153,6 +153,20 @@ pub fn publish_legacy_outbox(d: Db,c: cache.Cache,limit: int,timeout_ns: int) ->
     return ok(sent);
 }
 
+pub fn shard_of_account(account_id: str) -> int {
+    let b = to_bytes(account_id);
+    let h: int = 2166136261;
+    for x in b {
+        h = ((h ^ (x as int)) * 16777619) & 0x7fffffff;
+    }
+    return h % 64;
+}
+
+pub fn publish_session_revoked(c: cache.Cache, session_id: str) -> result[bool, str] {
+    let fields = ["type", "session.revoked", "session_id", session_id];
+    return cache.xadd(c, "stream:sessions", 100000, fields);
+}
+
 pub fn publish_runtime_outbox(d: Db,c: cache.Cache,node_id: str,limit: int,timeout_ns: int) -> result[int,str] {
     if limit<1 || limit>500 || timeout_ns<1000000 { return err("invalid outbox batch"); }
     if len(node_id)!=36 { return err("invalid outbox publisher node"); }
@@ -163,7 +177,16 @@ pub fn publish_runtime_outbox(d: Db,c: cache.Cache,node_id: str,limit: int,timeo
     let first_error="";
     for event in events {
         let stream="stream:market:"+event.market_id;
-        if event.audience=="account" { stream="stream:account:"+event.account_id; }
+        if event.audience=="account" {
+            stream="stream:account:"+event.account_id;
+            let shard = shard_of_account(event.account_id);
+            let shard_stream = "stream:private:" + to_str(shard);
+            let shard_fields = ["id",event.id,"type",event.type,"payload",event.payload,
+                "account_id",event.account_id,"market_id",event.market_id,
+                "market_seq",to_str(event.market_seq),"event_ordinal",to_str(event.event_ordinal),
+                "owner_epoch",to_str(event.owner_epoch)];
+            let _shard_appended = cache.xadd_ordered(c, shard_stream, event.account_id, 100000, event.market_seq, event.event_ordinal, shard_fields);
+        }
         let fields=["id",event.id,"type",event.type,"payload",event.payload,
             "market_id",event.market_id,"market_seq",to_str(event.market_seq),
             "event_ordinal",to_str(event.event_ordinal),"owner_epoch",to_str(event.owner_epoch)];
@@ -190,3 +213,4 @@ pub fn publish_runtime_outbox(d: Db,c: cache.Cache,node_id: str,limit: int,timeo
     if first_error!="" { return err(first_error); }
     return ok(sent);
 }
+

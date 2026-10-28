@@ -19,6 +19,9 @@ import "../../markets/service" as markets;
 import "../../markets/store" as markets_store;
 import "../../exchange/service" as exchange;
 import "../../exchange/store" as exchange_store;
+import "../../stream/domain" as stream_domain;
+import "../../stream/service" as stream_svc;
+import "../../stream/store" as stream_store;
 // zokor:imports
 
 pub gc struct Postman {
@@ -39,6 +42,7 @@ pub gc struct App {
     exchange_reads: exchange.ReadStore[exchange_store.Postgres],
     book_views: exchange.BookViewStore[exchange_store.Postgres],
     recovery_store: exchange.RecoveryStore[exchange_store.Postgres],
+    stream: stream_svc.StreamService[stream_store.PostgresRedisStore],
     node_id: str,
     runtime: RuntimeControl,
     runtime_views: map[str]str,
@@ -153,6 +157,10 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     registry.close_workers=s.markets.close_workers;
     registry.history_generations=s.markets.history_generations;
     let runtime_views:map[str]str={};
+    let runtime_views_lock = make_mutex();
+    let opt_redis: opt[redis.Pool] = c.pool;
+    let s_store = stream_store.make_stream_store(d.pool, opt_redis, runtime_views, runtime_views_lock);
+    let s_service = stream_svc.new_stream_service(s_store);
     let snapshot_queue:chan[exchange.SnapshotWrite]=make_chan(64);
     return ok(App {
         markets: registry,
@@ -167,10 +175,11 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         exchange_reads: exchange_reads,
         book_views: book_views,
         recovery_store: recovery_store,
+        stream: s_service,
         node_id: node_id,
         runtime: new_runtime_control(),
         runtime_views: runtime_views,
-        runtime_views_lock: make_mutex(),
+        runtime_views_lock: runtime_views_lock,
         snapshot_queue: snapshot_queue,
         reply_slots: make_chan(s.exchange.max_waiters),
         mailer: mailer_on(mail, s.email.from),
@@ -407,6 +416,7 @@ pub fn start_workers(a: App) {
     if len(a.settings.auth.google_client_id) > 0 {
         spawn accounts.run_jwks_refresher(a.accounts);
     }
+    start_stream_workers(a);
 }
 
 fn run_exchange_view_hydrator(a: App) -> int {
@@ -487,6 +497,90 @@ fn drain_market_signals(a: App) -> int {
         let got=chan_recv(a.markets.problems);
         guard let message=got else { return 0; }
         a.settings.server.logger.warn("markets",message);
+    }
+    return 0;
+}
+
+pub fn start_stream_workers(a: App) {
+    for s in 0..64 {
+        spawn run_stream_shard_reader(a, s);
+    }
+    spawn run_stream_cards_ticker(a);
+    spawn run_stream_session_revocations(a);
+    spawn run_stream_session_rechecker(a);
+}
+
+fn run_stream_shard_reader(a: App, shard: int) -> int {
+    let last_id = "$";
+    while true {
+        let now_ms = (time.mono() / 1000000) as int;
+        let read_fn = a.stream.store.read_shard_stream;
+        let read_res = read_fn(a.stream.store.context, shard, last_id, 1000, 100);
+        if let msgs = read_res {
+            for m in msgs {
+                last_id = m.id;
+                stream_svc.dispatch_private_event(a.stream.shards, m, now_ms);
+            }
+        } else {
+            time.sleep(200000000);
+        }
+    }
+    return 0;
+}
+
+fn run_stream_cards_ticker(a: App) -> int {
+    while true {
+        time.sleep(1000000000);
+        let now_ms = (time.mono() / 1000000) as int;
+        let stats_fn = a.stream.store.get_market_stats;
+        let stats_res = stats_fn(a.stream.store.context);
+        if let stats = stats_res {
+            stream_svc.dispatch_cards_tick(a.stream.ticker, stats, now_ms);
+        }
+    }
+    return 0;
+}
+
+fn run_stream_session_revocations(a: App) -> int {
+    let last_id = "$";
+    while true {
+        let now_ms = (time.mono() / 1000000) as int;
+        let read_fn = a.stream.store.read_session_revocations;
+        let read_res = read_fn(a.stream.store.context, last_id, 1000, 100);
+        if let sessions = read_res {
+            for sess in sessions {
+                last_id = sess.id;
+                stream_svc.revoke_session(a.stream, sess.session_id, now_ms);
+            }
+        } else {
+            time.sleep(500000000);
+        }
+    }
+    return 0;
+}
+
+fn run_stream_session_rechecker(a: App) -> int {
+    while true {
+        time.sleep(300000000000);
+        let sessions_to_check: [str] = [];
+        mutex_lock(a.stream.conns_lock);
+        for cid, c in a.stream.conns {
+            if c.session_id != "" {
+                push(sessions_to_check, c.session_id);
+            }
+        }
+        mutex_unlock(a.stream.conns_lock);
+
+        let now_ms = (time.mono() / 1000000) as int;
+        for sess_id in sessions_to_check {
+            let chk_fn = a.stream.store.is_session_valid;
+            let chk = chk_fn(a.stream.store.context, sess_id);
+            if let valid = chk {
+                if !valid {
+                    stream_svc.revoke_session(a.stream, sess_id, now_ms);
+                }
+            }
+        }
     }
     return 0;
 }

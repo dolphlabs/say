@@ -10,6 +10,7 @@ import "accounts/server" as accounts;
 import "ledger/server" as ledger;
 import "markets/server" as markets;
 import "exchange/server" as exchange;
+import "stream/server" as stream;
 // zokor:imports
 
 fn db_ready(s: app.App) -> result[int, str] {
@@ -67,6 +68,7 @@ accounts.mount(r);
 ledger.mount(r);
 exchange.mount(r);
 markets.mount(r);
+stream.mount(r);
 // zokor:mount
 if len(settings.ledger.metrics_token) > 0 {
     r.get("/metrics", app.metrics_route);
