@@ -685,6 +685,46 @@ pub fn post(c: pg.Conn, tx: domain.LedgerTx, d: until) -> result[domain.Posted, 
     return ok(ps[0]);
 }
 
+pub fn post_many_encoded(c: pg.Conn, txs: [domain.LedgerTx], d: until) -> result[[domain.Posted], str] {
+    let posted = post_many(c, txs, d);
+    guard let results = posted else let e = err_of(posted) {
+        return err(domain.encode(e));
+    }
+    return ok(results);
+}
+
+pub gc struct OrderHolds {
+    sedi_hold_id: str,
+    share_hold_id: str
+}
+
+pub fn reserve_order_holds(c: pg.Conn, owner_kind: str, account_id: str, season_id: str, market_id: str,
+                           order_id: str, outcome: str, sedi_amount: int, share_amount: int, d: until) -> result[OrderHolds, str] {
+    if (owner_kind != "user" && owner_kind != "bot") || (outcome != "YES" && outcome != "NO") ||
+       sedi_amount < 1 || share_amount < 0 {
+        return err("ORDER_HOLD_INPUT_INVALID");
+    }
+    let owner = domain.Owner { kind: owner_kind, id: account_id };
+    let txs: [domain.LedgerTx] = [
+        domain.hold_tx(owner, season_id, "SEDI", sedi_amount, "order", order_id, "order:" + order_id + ":sedi", "{}")
+    ];
+    if share_amount > 0 {
+        push(txs, domain.hold_tx(owner, season_id, outcome + ":" + market_id, share_amount, "order", order_id,
+                                 "order:" + order_id + ":shares", "{}"));
+    }
+    let posted = post_many(c, txs, d);
+    guard let results = posted else let e = err_of(posted) {
+        return err(domain.encode(e));
+    }
+    if len(results) != len(txs) || len(results[0].hold_ids) != 1 ||
+       (share_amount > 0 && len(results[1].hold_ids) != 1) {
+        return err("ORDER_HOLD_RESULT_INVALID");
+    }
+    let share_hold = "";
+    if share_amount > 0 { share_hold = results[1].hold_ids[0]; }
+    return ok(OrderHolds { sedi_hold_id: results[0].hold_ids[0], share_hold_id: share_hold });
+}
+
 pub fn read_hold(c: pg.Conn, hold_id: str, d: until) -> result[domain.HoldInfo, domain.LedgerError] {
     let hr = read_hold_row(c, hold_id, d);
     guard let found = hr else let e = err_of(hr) {

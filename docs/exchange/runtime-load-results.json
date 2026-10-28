@@ -1,0 +1,190 @@
+{
+  "platform": "macOS-15.7.7-x86_64-i386-64bit-Mach-O",
+  "machine": "x86_64",
+  "compiler": "slangc 0.2.4",
+  "rate": 2000,
+  "seconds": 5,
+  "workers": 64,
+  "client_queue": 256,
+  "db_pool": 64,
+  "heartbeat_pool": 2,
+  "poll_ms": 250,
+  "results": [
+    {
+      "offered": 10001,
+      "client_dropped": 9336,
+      "http_attempts": 665,
+      "statuses": {
+        "202": 192,
+        "503": 473
+      },
+      "http_latency": {
+        "p50_ms": 84.667,
+        "p95_ms": 2439.126,
+        "p99_ms": 2676.862
+      },
+      "health_latency": {
+        "p50_ms": 1.033,
+        "p95_ms": 2.616,
+        "p99_ms": 5.933
+      },
+      "peak_rss_bytes": 29896704,
+      "admitted": 192,
+      "offered_seconds": 5,
+      "wall_seconds": 7.034,
+      "drained": true,
+      "command_drain_seconds": 3.6,
+      "completed": 192,
+      "rejected_commands": 0,
+      "pending": 0,
+      "degraded_markets": 0,
+      "owner_epochs": 2,
+      "startup_recovery_seconds": 0.265,
+      "outbox_pending": 482,
+      "reconciliation": "passed",
+      "markets": 10,
+      "profile": "hot"
+    },
+    {
+      "offered": 10001,
+      "client_dropped": 9570,
+      "http_attempts": 431,
+      "statuses": {
+        "202": 401,
+        "503": 30
+      },
+      "http_latency": {
+        "p50_ms": 1999.714,
+        "p95_ms": 2859.574,
+        "p99_ms": 3226.664
+      },
+      "health_latency": {
+        "p50_ms": 1.088,
+        "p95_ms": 8.458,
+        "p99_ms": 42.738
+      },
+      "peak_rss_bytes": 423497728,
+      "admitted": 401,
+      "offered_seconds": 5,
+      "wall_seconds": 15.505,
+      "drained": true,
+      "command_drain_seconds": 8.782,
+      "completed": 403,
+      "rejected_commands": 0,
+      "pending": 0,
+      "degraded_markets": 0,
+      "owner_epochs": 3,
+      "startup_recovery_seconds": 8.256,
+      "outbox_pending": 1545,
+      "reconciliation": "passed",
+      "markets": 1000,
+      "profile": "distributed_1000"
+    },
+    {
+      "offered": 10001,
+      "client_dropped": 8097,
+      "http_attempts": 1904,
+      "statuses": {
+        "202": 1904
+      },
+      "http_latency": {
+        "p50_ms": 137.383,
+        "p95_ms": 526.959,
+        "p99_ms": 798.152
+      },
+      "health_latency": {
+        "p50_ms": 1.024,
+        "p95_ms": 2.832,
+        "p99_ms": 4.608
+      },
+      "peak_rss_bytes": 45731840,
+      "admitted": 0,
+      "offered_seconds": 5,
+      "wall_seconds": 6.354,
+      "drained": true,
+      "command_drain_seconds": 4.294,
+      "completed": 1851,
+      "rejected_commands": 0,
+      "pending": 0,
+      "degraded_markets": 0,
+      "owner_epochs": 1,
+      "startup_recovery_seconds": 0.512,
+      "outbox_pending": 7124,
+      "reconciliation": "passed",
+      "markets": 20,
+      "profile": "cancel_storm"
+    },
+    {
+      "offered": 10001,
+      "client_dropped": 9335,
+      "http_attempts": 666,
+      "statuses": {
+        "202": 104,
+        "503": 562
+      },
+      "http_latency": {
+        "p50_ms": 99.371,
+        "p95_ms": 3202.071,
+        "p99_ms": 3533.914
+      },
+      "health_latency": {
+        "p50_ms": 1.412,
+        "p95_ms": 4.868,
+        "p99_ms": 7.399
+      },
+      "peak_rss_bytes": 43048960,
+      "admitted": 104,
+      "offered_seconds": 5,
+      "wall_seconds": 8.438,
+      "drained": true,
+      "command_drain_seconds": 1.812,
+      "completed": 104,
+      "rejected_commands": 0,
+      "pending": 0,
+      "degraded_markets": 0,
+      "owner_epochs": 2,
+      "startup_recovery_seconds": 0.472,
+      "outbox_pending": 273,
+      "reconciliation": "passed",
+      "markets": 10,
+      "profile": "postgres_50ms"
+    },
+    {
+      "offered": 10001,
+      "client_dropped": 9396,
+      "http_attempts": 605,
+      "statuses": {
+        "202": 489,
+        "503": 116
+      },
+      "http_latency": {
+        "p50_ms": 683.584,
+        "p95_ms": 2153.198,
+        "p99_ms": 2237.426
+      },
+      "health_latency": {
+        "p50_ms": 1.049,
+        "p95_ms": 2.333,
+        "p99_ms": 30.722
+      },
+      "peak_rss_bytes": 28778496,
+      "admitted": 489,
+      "offered_seconds": 5,
+      "wall_seconds": 8.699,
+      "redis_outage_seconds": 60.005,
+      "drained": true,
+      "command_drain_seconds": 0.004,
+      "completed": 490,
+      "rejected_commands": 0,
+      "pending": 0,
+      "degraded_markets": 0,
+      "owner_epochs": 2,
+      "startup_recovery_seconds": 0.428,
+      "outbox_drain_seconds": 36.204,
+      "outbox_pending": 0,
+      "reconciliation": "passed",
+      "markets": 10,
+      "profile": "redis_outage_60s"
+    }
+  ]
+}

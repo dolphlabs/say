@@ -1,0 +1,88 @@
+{
+  "results": [
+    {
+      "name": "financial_http",
+      "seconds": 5.092,
+      "commands": 8,
+      "modes": [
+        "MINT",
+        "TRANSFER_YES",
+        "TRANSFER_NO",
+        "MERGE"
+      ],
+      "reconciliation": "passed"
+    },
+    {
+      "name": "golden_http_A_J",
+      "seconds": 21.057,
+      "cases": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I",
+        "J"
+      ],
+      "commands": 48,
+      "reconciliation": "passed"
+    },
+    {
+      "name": "cross_market_budget",
+      "seconds": 4.444,
+      "requests": 200,
+      "markets": 10,
+      "free": 17,
+      "held": 410,
+      "statuses": {
+        "409": 117,
+        "202": 10,
+        "429": 73
+      }
+    },
+    {
+      "name": "lifecycle_and_cross_node_views",
+      "seconds": 3.532,
+      "commands": 6,
+      "cross_node_genesis": "passed",
+      "suspend_resume_close": "passed"
+    },
+    {
+      "name": "admission_process_crashes",
+      "seconds": 10.977,
+      "windows": [
+        "W1 admission before actor",
+        "W6 client timeout after admission"
+      ],
+      "commands": 1
+    },
+    {
+      "name": "commit_process_crash",
+      "seconds": 10.603,
+      "window": "W2 committed before reply/apply",
+      "commands": 1
+    },
+    {
+      "name": "two_owner_final_guard",
+      "seconds": 12.449,
+      "window": "W4 lease expiration before final guard",
+      "epochs": [
+        1,
+        2
+      ],
+      "commands": 1
+    },
+    {
+      "name": "outbox_process_crashes",
+      "seconds": 1.038,
+      "windows": [
+        "W3 commit before outbox publication",
+        "W5 Redis append before PostgreSQL acknowledgement"
+      ],
+      "deduplicated_event": "a70734cf-cac3-4f44-9a35-426a7f30ac1b"
+    }
+  ]
+}

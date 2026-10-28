@@ -2,10 +2,10 @@ SLANGC ?= slangc
 ZOKOR ?= zokor
 COMPOSE ?= docker compose -f docker-compose.test.yml
 TEST_DATABASE_URL ?= postgres://say:say-test-only@127.0.0.1:55432/say_test?sslmode=disable
-TEST_APP_DATABASE_URL ?= postgres://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
+TEST_APP_DATABASE_URL ?= postgresql://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
 TEST_REDIS_URL ?= redis://127.0.0.1:56379
 
-.PHONY: test test-integration test-stack build run check load migrate
+.PHONY: test test-stream test-integration test-stack build run check load migrate
 
 # Every package with tests, found rather than listed, so a new one is
 # never left out. Without TEST_DATABASE_URL/TEST_REDIS_URL the Postgres
@@ -14,6 +14,10 @@ test:
 	@set -e; for d in $$(find src -name '*_test.sl' | xargs -n1 dirname | sort -u); do \
 		$(SLANGC) test $$d; \
 	done
+	$(MAKE) test-stream
+
+test-stream:
+	npm --prefix packages/say-stream test
 
 test-stack:
 	$(COMPOSE) up -d --wait
@@ -71,3 +75,20 @@ test-exchange: test-exchange-smoke
 
 bench-exchange:
 	python3 bench/run.py --go $(GO)
+
+RUNTIME_PYTHON ?= python3
+RUNTIME_COMMANDS ?= 100000
+
+.PHONY: runtime-tools test-runtime test-runtime-differential bench-runtime
+
+runtime-tools: build
+	$(SLANGC) tools/runtime/fixture/main.sl -o bin/runtime-fixture
+
+test-runtime: runtime-tools test-stack
+	$(RUNTIME_PYTHON) tools/runtime/acceptance.py
+
+test-runtime-differential: runtime-tools test-stack
+	$(RUNTIME_PYTHON) tools/runtime/differential.py --commands $(RUNTIME_COMMANDS)
+
+bench-runtime: runtime-tools test-stack
+	$(RUNTIME_PYTHON) tools/runtime/load.py

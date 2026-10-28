@@ -1,0 +1,2330 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "say API",
+    "version": "0.1.0",
+    "summary": "HTTP API currently implemented by say",
+    "description": "OpenAPI collection for the implemented authentication, season, ledger, reconciliation, and market-registry HTTP APIs. Import this file into Postman, then edit the server URL for your deployment. Authenticate using the `say_session` cookie or an Authorization Bearer token. Browser authentication uses an HttpOnly, Secure, SameSite=Lax cookie. Mobile clients may use Bearer authentication. Public market and season routes need no credentials. Admin routes require a valid session and role-based authorization described on each operation. Order admission, authenticated order reads, public book/trade/history reads, and cancellation are included below. The WebSocket stream remains a separate runtime surface and is not specified here. Timestamps are RFC 3339; season display timezone is Africa/Lagos. Amounts and prices are integer play-money units unless stated otherwise.",
+    "contact": {
+      "name": "say API maintainers"
+    },
+    "license": {
+      "name": "Proprietary"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local development default; edit this server URL in Postman if the configured port or deployment differs"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Authentication",
+      "description": "Signup, session, password, and Google sign-in flows."
+    },
+    {
+      "name": "Account",
+      "description": "Authenticated profile and account settings."
+    },
+    {
+      "name": "Seasons",
+      "description": "Public season clock and season information."
+    },
+    {
+      "name": "Ledger",
+      "description": "Authenticated balances, ledger history, and summary."
+    },
+    {
+      "name": "Operations",
+      "description": "Admin reconciliation and trading-halt controls."
+    },
+    {
+      "name": "Markets",
+      "description": "Public market discovery and detail."
+    },
+    {
+      "name": "Market administration",
+      "description": "Market registry lifecycle, validation, and source management."
+    },
+    {
+      "name": "Exchange",
+      "description": "Order admission, private order state, and public market execution data."
+    }
+  ],
+  "security": [],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": ["Operations"],
+        "summary": "Check process liveness",
+        "description": "Public liveness probe. Confirms the process is serving without querying dependencies.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Process is alive.",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "const": "ok" } } }, "example": { "status": "ok" } } }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": ["Operations"],
+        "summary": "Check service readiness",
+        "description": "Public readiness probe. Checks configured dependencies and returns only check status, never dependency error details.",
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "description": "All dependencies are ready.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Readiness" }, "example": { "status": "ok", "checks": { "db": "ok", "cache": "ok" } } } }
+          },
+          "503": {
+            "description": "One or more dependencies are unavailable or the service is shutting down.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Readiness" }, "examples": { "unavailable": { "value": { "status": "unavailable", "checks": { "db": "failing", "cache": "ok" } } }, "shuttingDown": { "value": { "status": "shutting_down", "checks": {} } } } } }
+          }
+        }
+      }
+    },
+    "/v1/auth/username/{name}": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Check username availability",
+        "description": "Public signup step. Rate-limited to 60 checks per minute per IP. Username matching is case-insensitive.",
+        "operationId": "checkUsername",
+        "parameters": [
+          { "$ref": "#/components/parameters/Username" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Username availability and suggestions.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UsernameCheck" },
+                "examples": {
+                  "available": {
+                    "summary": "Available username",
+                    "value": { "username": "utee", "available": true, "suggestions": [] }
+                  },
+                  "taken": {
+                    "summary": "Taken username",
+                    "value": { "username": "utee", "available": false, "reason": "USERNAME_TAKEN", "suggestions": ["utee.ng", "utee99", "utee_ng"] }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/username/hold": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Hold a username",
+        "description": "Public signup step. Reserves an available username for ten minutes. Use the returned hold_id in signup or Google completion.",
+        "operationId": "holdUsername",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UsernameHoldRequest" },
+              "example": { "username": "utee" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Username hold created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UsernameHold" },
+                "example": { "username": "utee", "hold_id": "hold_9f12c8", "expires_at": "2026-10-27T20:50:00Z" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/signup": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Create an unverified account",
+        "description": "Signup step 2. Sends a six-digit email verification code. Keep signup_token for OTP resend and verification; it expires after 30 minutes. Rate limit: five signups per IP per hour.",
+        "operationId": "signup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SignupRequest" },
+              "example": {
+                "username": "utee",
+                "hold_id": "hold_9f12c8",
+                "email": "utee@example.com",
+                "password": "correct horse battery"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created; verification code sent.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SignupResponse" },
+                "example": {
+                  "signup_token": "signup_opaque_token",
+                  "email_masked": "u•••@example.com",
+                  "resend_available_at": "2026-10-27T20:44:22Z"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/otp/resend": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Resend an email code",
+        "description": "For email verification, send signup_token and purpose=verify_email. For password reset, send email and purpose=reset_password; the response does not disclose whether the email exists. A resend is available at most once per 60 seconds and five times per email per hour.",
+        "operationId": "resendOtp",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OtpResendRequest" },
+              "examples": {
+                "verifyEmail": {
+                  "summary": "Resend verification code",
+                  "value": { "signup_token": "signup_opaque_token", "purpose": "verify_email" }
+                },
+                "resetPassword": {
+                  "summary": "Send password reset code",
+                  "value": { "email": "utee@example.com", "purpose": "reset_password" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Request accepted.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ResendResponse" },
+                "example": { "resend_available_at": "2026-10-27T20:44:22Z" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "410": { "$ref": "#/components/responses/PendingExpired" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/otp/verify": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Verify signup email",
+        "description": "Signup step 3. On success, sets the say_session cookie. Codes expire after ten minutes and lock after five incorrect attempts.",
+        "operationId": "verifyOtp",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OtpVerifyRequest" },
+              "example": { "signup_token": "signup_opaque_token", "code": "381204" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SignedIn" },
+          "400": { "$ref": "#/components/responses/OtpError" },
+          "410": { "$ref": "#/components/responses/PendingExpired" },
+          "423": { "$ref": "#/components/responses/OtpLocked" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Log in with email and password",
+        "description": "Sets the say_session cookie on success. Mobile clients may also read the session token from Set-Cookie and use Authorization: Bearer.",
+        "operationId": "login",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" },
+              "example": { "email": "utee@example.com", "password": "correct horse battery" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SignedIn" },
+          "401": { "$ref": "#/components/responses/InvalidCredentials" },
+          "403": { "$ref": "#/components/responses/EmailNotVerified" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/google/start": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Start Google sign-in",
+        "description": "Redirects to Google. intent defaults to login; signup begins Google signup; link requires a valid session and links Google to that account.",
+        "operationId": "googleStart",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }, {}],
+        "parameters": [
+          {
+            "name": "intent",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["signup", "login", "link"], "default": "login" },
+            "example": "login"
+          }
+        ],
+        "responses": {
+          "302": { "description": "Redirect to Google authorization." },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/google/callback": {
+      "get": {
+        "tags": ["Authentication"],
+        "summary": "Complete Google OAuth callback",
+        "description": "Google redirects to this endpoint. The API redirects back to the configured app URL. Outcomes include /, /signup/google?pending_token=…&email=…, /settings?google=linked, or /login?error=CODE. Successful sign-in sets the session cookie.",
+        "operationId": "googleCallback",
+        "parameters": [
+          { "name": "state", "in": "query", "required": false, "schema": { "type": "string" }, "description": "OAuth state returned by Google." },
+          { "name": "code", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Authorization code returned by Google." },
+          { "name": "error", "in": "query", "required": false, "schema": { "type": "string" }, "description": "OAuth provider error, if any." }
+        ],
+        "responses": {
+          "302": { "description": "Redirect back into the application; may set say_session." }
+        }
+      }
+    },
+    "/v1/auth/google/complete": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Complete Google signup",
+        "description": "Completes signup for a new Google identity after the user picks a held username. Sets the session cookie.",
+        "operationId": "googleComplete",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/GoogleCompleteRequest" },
+              "example": { "pending_token": "google_pending_token", "username": "utee", "hold_id": "hold_9f12c8" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SignedIn" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "410": { "$ref": "#/components/responses/PendingExpired" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Log out current session",
+        "description": "Idempotent and allowed without a session. Revokes the current session when present and clears the say_session cookie.",
+        "operationId": "logout",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }, {}],
+        "responses": {
+          "204": { "$ref": "#/components/responses/NoContent" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/logout-others": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Log out other sessions",
+        "description": "Requires a session. Revokes every other session for the account while preserving the current session.",
+        "operationId": "logoutOtherSessions",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "204": { "$ref": "#/components/responses/NoContent" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/password/forgot": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Request password reset",
+        "description": "Always responds with 202 and an empty object to avoid disclosing whether an email address is registered.",
+        "operationId": "forgotPassword",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EmailRequest" },
+              "example": { "email": "utee@example.com" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Reset request accepted.",
+            "content": { "application/json": { "schema": { "type": "object" }, "example": {} } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/auth/password/reset": {
+      "post": {
+        "tags": ["Authentication"],
+        "summary": "Reset password",
+        "description": "Ends every active session and clears the current session cookie.",
+        "operationId": "resetPassword",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PasswordResetRequest" },
+              "example": { "email": "utee@example.com", "code": "381204", "new_password": "a-new-secure-password" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "$ref": "#/components/responses/NoContent" },
+          "400": { "$ref": "#/components/responses/OtpError" },
+          "423": { "$ref": "#/components/responses/OtpLocked" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": ["Account"],
+        "summary": "Get current account",
+        "description": "Returns the authenticated account profile.",
+        "operationId": "getMe",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Current account.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/User" },
+                "example": {
+                  "id": "6f1c40a1-6fd8-4ed1-bdfb-64fa5cf731ef",
+                  "username": "utee",
+                  "email": "utee@example.com",
+                  "email_verified": true,
+                  "has_password": true,
+                  "google_linked": false,
+                  "username_changeable_at": "2026-11-02T23:00:00Z",
+                  "created_at": "2026-10-19T21:02:11Z"
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      },
+      "delete": {
+        "tags": ["Account"],
+        "summary": "Delete current account",
+        "description": "Flags the account as deleted, ends all sessions, and clears the cookie. The operation is accepted asynchronously.",
+        "operationId": "deleteMe",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "202": { "description": "Deletion accepted.", "content": { "application/json": { "schema": { "type": "object" }, "example": {} } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/me/password": {
+      "post": {
+        "tags": ["Account"],
+        "summary": "Change password",
+        "description": "Requires the current password and ends every other session.",
+        "operationId": "changePassword",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChangePasswordRequest" },
+              "example": { "current_password": "current password", "new_password": "a-new-secure-password" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "$ref": "#/components/responses/NoContent" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/me/google": {
+      "delete": {
+        "tags": ["Account"],
+        "summary": "Unlink Google sign-in",
+        "description": "Requires a session. Fails with LAST_SIGN_IN_METHOD if the account has no password configured.",
+        "operationId": "unlinkGoogle",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "204": { "$ref": "#/components/responses/NoContent" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/seasons/current": {
+      "get": {
+        "tags": ["Seasons"],
+        "summary": "Get current season",
+        "description": "Public. Returns the active season clock in the configured timezone context. In the current implementation, no active season returns SEASON_NOT_FOUND rather than a null season wrapper.",
+        "operationId": "getCurrentSeason",
+        "responses": {
+          "200": {
+            "description": "Current season.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Season" },
+                "example": {
+                  "id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0",
+                  "ordinal": 12,
+                  "status": "ACTIVE",
+                  "starts_at": "2026-10-20T23:00:00Z",
+                  "ends_at": "2026-11-03T23:00:00Z",
+                  "day": 7,
+                  "days_total": 14,
+                  "timezone": "Africa/Lagos",
+                  "server_time": "2026-10-27T19:37:37.336Z"
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/SeasonNotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/seasons/{ordinal}": {
+      "get": {
+        "tags": ["Seasons"],
+        "summary": "Get season by ordinal",
+        "operationId": "getSeasonByOrdinal",
+        "parameters": [
+          { "$ref": "#/components/parameters/SeasonOrdinal" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Season with finalization status.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SeasonDetail" },
+                "example": {
+                  "id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0",
+                  "ordinal": 12,
+                  "status": "FINALIZED",
+                  "starts_at": "2026-10-20T23:00:00Z",
+                  "ends_at": "2026-11-03T23:00:00Z",
+                  "day": 14,
+                  "days_total": 14,
+                  "timezone": "Africa/Lagos",
+                  "server_time": "2026-11-03T23:00:00.000Z",
+                  "finalized": true
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/SeasonNotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/me/balance": {
+      "get": {
+        "tags": ["Ledger"],
+        "summary": "Get current or selected season balance",
+        "description": "Requires a session. Omit season or use season=current for the active season; use a numeric ordinal for a historical season.",
+        "operationId": "getBalance",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "description": "Season ordinal, or current. Defaults to the active season.",
+            "schema": { "type": "string", "default": "current", "examples": ["current", "12"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available and held SEDI balance.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Balance" },
+                "example": { "season": { "ordinal": 12, "status": "ACTIVE" }, "available": 875, "held": 125, "starting_grant": 1000 }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/SeasonNotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/me/ledger": {
+      "get": {
+        "tags": ["Ledger"],
+        "summary": "List ledger entries",
+        "description": "Requires a session. Cursor-based page for the requested season. limit must be between 1 and 100; default 50.",
+        "operationId": "getLedgerPage",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/SeasonQuery" },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "example": "eyJwYWdlIjoyfQ" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }, "example": 50 }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of ledger items.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LedgerPage" },
+                "example": {
+                  "items": [
+                    {
+                      "id": "c0ae6a11-5327-4e16-9fbe-a0c247eac31d",
+                      "at": "2026-10-27T19:32:10.442Z",
+                      "kind": "SEASON_GRANT",
+                      "delta": 1000,
+                      "held_delta": 0,
+                      "available_after": 1000,
+                      "held_after": 0,
+                      "ref": { "type": "season", "id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0" },
+                      "shares": [],
+                      "meta": {}
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/SeasonNotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/me/summary": {
+      "get": {
+        "tags": ["Ledger"],
+        "summary": "Get season and balance summary",
+        "description": "Requires a session. Season and balance may be null when no active season or balance is available.",
+        "operationId": "getSummary",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Current account summary.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Summary" },
+                "example": {
+                  "season": {
+                    "id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0",
+                    "ordinal": 12,
+                    "status": "ACTIVE",
+                    "starts_at": "2026-10-20T23:00:00Z",
+                    "ends_at": "2026-11-03T23:00:00Z",
+                    "day": 7,
+                    "days_total": 14,
+                    "timezone": "Africa/Lagos",
+                    "server_time": "2026-10-27T19:37:37.336Z"
+                  },
+                  "balance": { "season": { "ordinal": 12, "status": "ACTIVE" }, "available": 875, "held": 125, "starting_grant": 1000 }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/reconciliation/latest": {
+      "get": {
+        "tags": ["Operations"],
+        "summary": "Get latest reconciliation and trading halt state",
+        "description": "Requires an authenticated admin role.",
+        "operationId": "getLatestReconciliation",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Latest reconciliation run and halt status.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReconciliationStatus" },
+                "example": {
+                  "trading_halted": { "halted": false, "reason": "", "changed_at": "2026-10-27T18:00:00Z" },
+                  "run": {
+                    "id": "5b43ab85-8e84-4a14-8497-6c8c0e662eba",
+                    "scope": "full",
+                    "status": "COMPLETE",
+                    "checks": [{ "name": "wallet_totals", "status": "OK", "count": 0, "detail": "" }],
+                    "ok": true,
+                    "finished_at": "2026-10-27T19:30:00Z"
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/reconciliation/run": {
+      "post": {
+        "tags": ["Operations"],
+        "summary": "Request reconciliation",
+        "description": "Requires an authenticated admin role. Enqueues a full reconciliation run and returns its id.",
+        "operationId": "requestReconciliation",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "202": {
+            "description": "Reconciliation was queued.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RunAccepted" },
+                "example": { "run_id": "5b43ab85-8e84-4a14-8497-6c8c0e662eba" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/trading-halt/clear": {
+      "post": {
+        "tags": ["Operations"],
+        "summary": "Clear trading halt",
+        "description": "Requires an authenticated super_admin role. The reason must contain 3–500 characters.",
+        "operationId": "clearTradingHalt",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReasonRequest" },
+              "example": { "reason": "Reconciliation completed and balances were reviewed." }
+            }
+          }
+        },
+        "responses": {
+          "204": { "$ref": "#/components/responses/NoContent" },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/categories": {
+      "get": {
+        "tags": ["Markets"],
+        "summary": "List market categories",
+        "operationId": "listCategories",
+        "responses": {
+          "200": {
+            "description": "Category list with count of open markets.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Category" } },
+                "example": [{ "id": "00000000-0000-4000-a000-000000000101", "name": "Football", "icon": "football", "open_count": 8 }]
+              }
+            }
+          },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/markets": {
+      "get": {
+        "tags": ["Markets"],
+        "summary": "Browse public markets",
+        "description": "Returns an immutable-snapshot page. Cursor is bound to the generation and filters; restart pagination if an old snapshot expires. Card statistics are null until actual exchange statistics exist.",
+        "operationId": "listMarkets",
+        "parameters": [
+          { "name": "filter", "in": "query", "required": false, "schema": { "type": "string", "enum": ["new", "trending", "ending_soon"], "default": "new" }, "example": "new" },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["open", "resolving", "all"], "default": "open" }, "example": "open" },
+          { "name": "category", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" }, "example": "00000000-0000-4000-a000-000000000101" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 24 }, "example": 24 },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "example": "eyJnZW5lcmF0aW9uIjo0Mn0" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of public market cards.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MarketPage" },
+                "example": {
+                  "items": [{
+                    "id": "11111111-1111-4111-a111-111111111111",
+                    "slug": "will-enyimba-win",
+                    "question": "Will Enyimba win the Sunday fixture?",
+                    "category": { "id": "00000000-0000-4000-a000-000000000101", "name": "Football", "icon": "football" },
+                    "status": "OPEN",
+                    "closes_at": "2026-10-30T15:00:00.000Z",
+                    "closing_soon": false,
+                    "redemption_units": 100,
+                    "status_note": "",
+                    "last_price": null,
+                    "chance_pct": null,
+                    "yes_ask": null,
+                    "no_ask": null,
+                    "volume_units": null,
+                    "change_24h": null
+                  }],
+                  "next_cursor": null,
+                  "generation": 42,
+                  "as_of": "2026-10-27T19:30:00.000Z"
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "409": { "$ref": "#/components/responses/StaleSnapshot" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/markets/featured": {
+      "get": {
+        "tags": ["Markets"],
+        "summary": "Get featured market",
+        "description": "Returns the highest-priority eligible open market card. series_7d is currently null until exchange bars are available.",
+        "operationId": "getFeaturedMarket",
+        "responses": {
+          "200": {
+            "description": "Featured card.",
+            "content": {
+              "application/json": {
+                "schema": { "allOf": [{ "$ref": "#/components/schemas/MarketCard" }, { "type": "object", "properties": { "series_7d": { "type": "null", "example": null } } }] },
+                "example": {
+                  "id": "11111111-1111-4111-a111-111111111111",
+                  "slug": "will-enyimba-win",
+                  "question": "Will Enyimba win the Sunday fixture?",
+                  "category": { "id": "00000000-0000-4000-a000-000000000101", "name": "Football", "icon": "football" },
+                  "status": "OPEN",
+                  "closes_at": "2026-10-30T15:00:00.000Z",
+                  "closing_soon": false,
+                  "redemption_units": 100,
+                  "status_note": "",
+                  "last_price": null,
+                  "chance_pct": null,
+                  "yes_ask": null,
+                  "no_ask": null,
+                  "volume_units": null,
+                  "change_24h": null,
+                  "series_7d": null
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/markets/search": {
+      "get": {
+        "tags": ["Markets"],
+        "summary": "Search public markets",
+        "description": "Searches market question text. q must be 2–140 Unicode characters. Returns at most 50 cards.",
+        "operationId": "searchMarkets",
+        "parameters": [
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string", "minLength": 2, "maxLength": 140 }, "example": "Enyimba" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching market cards.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/MarketCard" } }, "example": [] } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/markets/{selector}": {
+      "get": {
+        "tags": ["Markets"],
+        "summary": "Get public market detail",
+        "description": "selector accepts a market UUID or slug. Public output omits private author/approval details.",
+        "operationId": "getMarket",
+        "parameters": [
+          { "name": "selector", "in": "path", "required": true, "schema": { "type": "string" }, "example": "will-enyimba-win" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Market card, rules, price band, source, and season metadata.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MarketDetail" },
+                "example": {
+                  "id": "11111111-1111-4111-a111-111111111111",
+                  "slug": "will-enyimba-win",
+                  "question": "Will Enyimba win the Sunday fixture?",
+                  "category": { "id": "00000000-0000-4000-a000-000000000101", "name": "Football", "icon": "football" },
+                  "status": "OPEN",
+                  "closes_at": "2026-10-30T15:00:00.000Z",
+                  "closing_soon": false,
+                  "redemption_units": 100,
+                  "status_note": "",
+                  "last_price": null,
+                  "chance_pct": null,
+                  "yes_ask": null,
+                  "no_ask": null,
+                  "volume_units": null,
+                  "change_24h": null,
+                  "rules": {
+                    "yes_if": "The official final result is an Enyimba win.",
+                    "no_if": "The official final result is not an Enyimba win.",
+                    "edge_cases": "A postponed or abandoned fixture is reviewed for a void."
+                  },
+                  "resolve_by": "2026-11-02T18:00:00.000Z",
+                  "price_band": { "min": 1, "max": 99, "tick": 1 },
+                  "max_order_qty": 10000,
+                  "fee_units": 1,
+                  "terms_version": 1,
+                  "opening_price": 50,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "resolution_source": { "name": "Official results", "url": "https://example.test/results" },
+                  "season": { "ordinal": 12, "ends_at": "2026-11-03T23:00:00.000Z" }
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/markets": {
+      "get": {
+        "tags": ["Market administration"],
+        "summary": "List markets visible to the caller",
+        "description": "Requires a valid session and creator, curator, or super_admin market access. Creator results are author-scoped. Cursor is bound to generation, status, mine filter, and caller.",
+        "operationId": "adminListMarkets",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" }, "example": "REVIEW" },
+          { "name": "mine", "in": "query", "required": false, "schema": { "type": "boolean", "default": false }, "example": true },
+          { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" }, "example": "eyJnZW5lcmF0aW9uIjo0Mn0" },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }, "example": 50 }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of registry market records.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminMarketPage" }, "example": { "items": [], "next_cursor": null, "generation": 42 } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "409": { "$ref": "#/components/responses/StaleSnapshot" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      },
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Create a market draft",
+        "description": "Requires a valid session and creator role. Creates a partial DRAFT; fields may be completed with PATCH. Example below is a complete draft. All timestamps must be RFC 3339.",
+        "operationId": "createMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MarketWriteRequest" },
+              "example": {
+                "question": "Will Enyimba win the Sunday fixture?",
+                "category_id": "00000000-0000-4000-a000-000000000101",
+                "season_id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0",
+                "resolution_source_id": "e1111111-1111-4111-a111-111111111111",
+                "rules": {
+                  "yes_if": "The official final result is an Enyimba win.",
+                  "no_if": "The official final result is not an Enyimba win.",
+                  "edge_cases": "A postponed or abandoned fixture is reviewed for a void."
+                },
+                "open_at": "2026-10-28T15:00:00Z",
+                "close_at": "2026-10-30T15:00:00Z",
+                "resolve_by": "2026-11-02T18:00:00Z",
+                "redemption_units": 100,
+                "min_price": 1,
+                "max_price": 99,
+                "tick": 1,
+                "max_order_qty": 10000,
+                "fee_units": 1,
+                "min_order_notional": 2,
+                "liquidity_request": 0,
+                "featured_rank": 0,
+                "opening_price": 50
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Draft created; Location identifies it.",
+            "headers": { "Location": { "schema": { "type": "string" }, "example": "/v1/admin/markets/11111111-1111-4111-a111-111111111111" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminMarket" }, "examples": { "createdDraft": { "$ref": "#/components/examples/AdminMarket" } } } }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/markets/{id}": {
+      "patch": {
+        "tags": ["Market administration"],
+        "summary": "Edit a draft market",
+        "description": "Requires a session and creator access to the draft. version is required for compare-and-swap. Omitted fields remain unchanged; explicit null clears an optional field. Economic fields are immutable after opening.",
+        "operationId": "editMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "allOf": [{ "$ref": "#/components/schemas/MarketWriteRequest" }, { "type": "object", "required": ["version"], "properties": { "version": { "type": "integer", "minimum": 1 } } }] },
+              "example": { "version": 1, "question": "Will Enyimba win the confirmed Sunday fixture?", "reason": "Fixture confirmed." }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Updated market.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminMarket" }, "examples": { "updatedMarket": { "$ref": "#/components/examples/AdminMarket" } } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/markets/{id}/submit": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Submit a draft for review",
+        "description": "Requires a session and author access. Validates and freezes the terms, then transitions to REVIEW.",
+        "operationId": "submitMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/VersionReason" },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/ValidationError" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/approve": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Approve a submitted market",
+        "description": "Requires an independent reviewer; an author cannot approve their own submission, including a super_admin. Approval moves the market to APPROVED, not directly to OPEN.",
+        "operationId": "approveMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/VersionReason" },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/request-changes": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Request changes to a submitted market",
+        "description": "Requires reviewer access. reason explains the requested change and invalidates pending approval.",
+        "operationId": "requestMarketChanges",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/VersionReasonRequired" },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/reject": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Reject a submitted market",
+        "description": "Requires reviewer access and a reason.",
+        "operationId": "rejectMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/VersionReasonRequired" },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/suspend": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Suspend a market",
+        "description": "Requires reviewer access and a reason.",
+        "operationId": "suspendMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/VersionReasonRequired" },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/resume": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Resume a suspended market",
+        "description": "Requires reviewer access and a reason. The resulting status is OPEN or CLOSED depending on the close deadline.",
+        "operationId": "resumeMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/VersionReasonRequired" },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/clarify": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Clarify market terms",
+        "description": "Requires super_admin access. Only question and rules may be changed; economic fields are rejected with LOCKED_AFTER_OPEN. version is required.",
+        "operationId": "clarifyMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "required": ["version"], "properties": { "version": { "type": "integer", "minimum": 1 }, "reason": { "type": "string" }, "question": { "type": "string" }, "rules": { "$ref": "#/components/schemas/Rules" } } },
+              "example": { "version": 5, "reason": "Clarifying the confirmed fixture.", "question": "Will Enyimba win the confirmed Sunday fixture?", "rules": { "yes_if": "The official final result is an Enyimba win.", "no_if": "The official final result is not an Enyimba win.", "edge_cases": "A postponed or abandoned fixture is reviewed for a void." } }
+            }
+          }
+        },
+        "responses": { "200": { "$ref": "#/components/responses/MarketMutation" }, "401": { "$ref": "#/components/responses/Unauthenticated" }, "403": { "$ref": "#/components/responses/ForbiddenRole" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" }, "503": { "$ref": "#/components/responses/Unavailable" } }
+      }
+    },
+    "/v1/admin/markets/{id}/history": {
+      "get": {
+        "tags": ["Market administration"],
+        "summary": "Get market terms and audit history",
+        "description": "Requires a valid session and market read permission. Returns the stored history document, including immutable terms, approval facts/current projections, and recent audit records.",
+        "operationId": "getAdminMarketHistory",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
+        "responses": {
+          "200": { "description": "Market history document.", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true }, "example": { "terms": [], "approvals": [], "audit": [] } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/markets/validate": {
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Validate market fields without saving",
+        "description": "Requires a valid session and creator or reviewer access. Returns all detected field issues.",
+        "operationId": "validateMarket",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MarketWriteRequest" }, "example": { "question": "Will Enyimba win the Sunday fixture?", "category_id": "00000000-0000-4000-a000-000000000101", "season_id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0", "resolution_source_id": "e1111111-1111-4111-a111-111111111111", "rules": { "yes_if": "The official final result is an Enyimba win.", "no_if": "The official final result is not an Enyimba win.", "edge_cases": "A postponed fixture is reviewed for a void." }, "open_at": "2026-10-28T15:00:00Z", "close_at": "2026-10-30T15:00:00Z", "resolve_by": "2026-11-02T18:00:00Z", "redemption_units": 100, "min_price": 1, "max_price": 99, "tick": 1 } } }
+        },
+        "responses": {
+          "200": { "description": "Validation result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ValidationResult" }, "examples": { "valid": { "value": { "valid": true, "errors": [] } }, "invalid": { "value": { "valid": false, "errors": [{ "code": "SOURCE_NOT_APPROVED", "field": "resolution_source_id", "message": "Select an approved resolution source." }] } } } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/seasons": {
+      "get": {
+        "tags": ["Market administration"],
+        "summary": "List seasons available to market administration",
+        "description": "Requires a valid session and creator or reviewer market access. Only ACTIVE and SCHEDULED seasons are returned.",
+        "operationId": "listAdminSeasons",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Season choices for the market form.",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/AdminSeason" } } } }, "example": { "items": [{ "id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0", "ordinal": 12, "status": "ACTIVE", "starts_at": "2026-10-20T23:00:00Z", "ends_at": "2026-11-03T23:00:00Z", "timezone": "Africa/Lagos" }] } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/admin/resolution-sources": {
+      "get": {
+        "tags": ["Market administration"],
+        "summary": "List resolution sources",
+        "description": "Requires a valid session and creator or reviewer market access.",
+        "operationId": "listResolutionSources",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "responses": {
+          "200": {
+            "description": "Resolution source list.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/ResolutionSource" } }, "example": [{ "id": "e1111111-1111-4111-a111-111111111111", "name": "Official results", "url_pattern": "https://example.test/results", "kind": "html", "approved": true }] } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      },
+      "post": {
+        "tags": ["Market administration"],
+        "summary": "Create resolution source",
+        "description": "Requires a valid session and creator/reviewer access. New sources are unapproved by default and cannot validate a market until approved through the configured governance workflow.",
+        "operationId": "createResolutionSource",
+        "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ResolutionSourceRequest" },
+              "example": { "name": "Official results", "url_pattern": "https://example.test/results", "kind": "html" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Unapproved source created.", "headers": { "Location": { "schema": { "type": "string" }, "example": "/v1/admin/resolution-sources/e1111111-1111-4111-a111-111111111111" } }, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "name", "approved"], "properties": { "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "approved": { "type": "boolean" } } }, "example": { "id": "e1111111-1111-4111-a111-111111111111", "name": "Official results", "approved": false } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/ForbiddenRole" },
+          "422": { "$ref": "#/components/responses/ValidationError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/markets/{id}/orders": {
+      "post": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Admit an order",
+        "description": "Requires a session and a UUID Idempotency-Key. Admission and holds commit atomically. The handler waits up to 300ms for committed execution, returning 200 with the private order or 202 ADMITTED. Identical retries return the same order even after closure; changing intent conflicts. Account, owner, holds and sequence facts are server-owned.",
+        "operationId": "admitOrder",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "22222222-2222-4222-a222-222222222222"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "outcome",
+                      "side",
+                      "price",
+                      "qty"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "limit",
+                        "default": "limit"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "YES",
+                          "NO"
+                        ]
+                      },
+                      "side": {
+                        "type": "string",
+                        "enum": [
+                          "BUY",
+                          "SELL"
+                        ]
+                      },
+                      "price": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "qty": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "tif": {
+                        "type": "string",
+                        "enum": [
+                          "GTC",
+                          "IOC"
+                        ],
+                        "default": "GTC"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "outcome",
+                      "side",
+                      "spend"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "market"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "YES",
+                          "NO"
+                        ]
+                      },
+                      "side": {
+                        "const": "BUY"
+                      },
+                      "spend": {
+                        "type": "integer",
+                        "minimum": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "outcome",
+                      "side",
+                      "qty"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "market"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "YES",
+                          "NO"
+                        ]
+                      },
+                      "side": {
+                        "const": "SELL"
+                      },
+                      "qty": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              "examples": {
+                "limitBuy": {
+                  "value": {
+                    "type": "limit",
+                    "outcome": "YES",
+                    "side": "BUY",
+                    "price": 42,
+                    "qty": 10,
+                    "tif": "GTC"
+                  }
+                },
+                "marketBuy": {
+                  "value": {
+                    "type": "market",
+                    "outcome": "YES",
+                    "side": "BUY",
+                    "spend": 500
+                  }
+                },
+                "marketSell": {
+                  "value": {
+                    "type": "market",
+                    "outcome": "NO",
+                    "side": "SELL",
+                    "qty": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Durably admitted; execution is pending.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "command_id": "44444444-4444-4444-a444-444444444444",
+                  "status": "ADMITTED",
+                  "existing": false
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Committed execution, including resting or rejected results. Includes private order fields, command_id and existing.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "status": "PARTIAL",
+                  "outcome": "YES",
+                  "side": "BUY",
+                  "price": 42,
+                  "qty": 10,
+                  "remaining": 4,
+                  "filled": 6,
+                  "cancelled": 0,
+                  "accepted_seq": 17,
+                  "fee_paid": true,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "principal": 240,
+                  "filled_qty": 6,
+                  "fee_charged": 1,
+                  "avg_price": 40,
+                  "command_id": "44444444-4444-4444-a444-444444444444",
+                  "existing": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/orders/{id}": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Get a private order",
+        "description": "Requires a session. Only the owning account can read the order; missing and non-owned order IDs both return 404. Response is no-store.",
+        "operationId": "getOrder",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current committed order state.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "status": "PARTIAL",
+                  "outcome": "YES",
+                  "side": "BUY",
+                  "price": 42,
+                  "qty": 10,
+                  "remaining": 4,
+                  "filled": 6,
+                  "cancelled": 0,
+                  "accepted_seq": 17,
+                  "fee_paid": true,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "principal": 240,
+                  "filled_qty": 6,
+                  "fee_charged": 1,
+                  "avg_price": 40
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Request order cancellation",
+        "description": "Requires a session and ownership. Cancellation is durably queued; 202 means pending, not yet committed. Repeating the request returns the existing command.",
+        "operationId": "cancelOrder",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation is pending.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "command_id": "44444444-4444-4444-a444-444444444444",
+                  "status": "CANCEL_PENDING",
+                  "existing": false
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Committed cancellation or current final order for the existing cancel command.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "status": "CANCELLED",
+                  "outcome": "YES",
+                  "side": "BUY",
+                  "price": 42,
+                  "qty": 10,
+                  "remaining": 4,
+                  "filled": 6,
+                  "cancelled": 0,
+                  "accepted_seq": 17,
+                  "fee_paid": true,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "principal": 240,
+                  "filled_qty": 6,
+                  "fee_charged": 1,
+                  "avg_price": 40,
+                  "command_id": "44444444-4444-4444-a444-444444444444"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/me/orders": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "List the caller's orders",
+        "description": "Requires a session. Uses bounded keyset pagination. status defaults to open and can be all; market_id is optional. Cursor is bound to account, market filter, and status. Response is no-store.",
+        "operationId": "listMyOrders",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "market_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "all"
+              ],
+              "default": "open"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of private orders.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "order_id": "33333333-3333-4333-a333-333333333333",
+                      "market_id": "11111111-1111-4111-a111-111111111111",
+                      "status": "OPEN",
+                      "outcome": "YES",
+                      "side": "BUY",
+                      "price": 42,
+                      "qty": 10,
+                      "remaining": 10,
+                      "filled": 0,
+                      "cancelled": 0,
+                      "accepted_seq": 17,
+                      "fee_paid": false,
+                      "created_at": "2026-10-27T19:00:00.000Z"
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/markets/{id}/book": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Get the published public book",
+        "description": "Public, immutable in-memory view. A non-ready, expired, or unavailable local view returns 503; no actor message is sent.",
+        "operationId": "getBook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current published book view.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "owner_epoch": 3,
+                  "committed_seq": 17,
+                  "book_seq": 17,
+                  "last_price": 42,
+                  "pending_count": 0,
+                  "as_of": 1793127600000,
+                  "lease_until": 1793127610000,
+                  "health": "READY",
+                  "mode": "OPEN",
+                  "bids": [
+                    {
+                      "yes_price": 42,
+                      "qty": 12
+                    }
+                  ],
+                  "asks": [
+                    {
+                      "yes_price": 45,
+                      "qty": 8
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/markets/{id}/trades": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "List public committed trades",
+        "description": "Returns fills in descending execution sequence and fill index. Cursor is market-scoped; limit defaults to 50 and is capped at 100.",
+        "operationId": "listMarketTrades",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of committed fills.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "execution_seq": 17,
+                      "fill_index": 0,
+                      "mode": "TRANSFER_YES",
+                      "qty": 2,
+                      "yes_price": 42,
+                      "created_at": "2026-10-27T19:00:00.000Z"
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/markets/{id}/history": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Get public trade history",
+        "description": "Returns minute-price OHLCV bars downsampled to at most about 120 buckets for 1H, 6H, 1D, 1W, or ALL.",
+        "operationId": "getMarketHistory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1H",
+                "6H",
+                "1D",
+                "1W",
+                "ALL"
+              ],
+              "default": "1D"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Downsampled OHLCV bars.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "period": "1D",
+                  "items": [
+                    {
+                      "bucket_at": "2026-10-27T19:00:00Z",
+                      "open": 41,
+                      "high": 45,
+                      "low": 39,
+                      "close": 42,
+                      "volume": 150
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "SessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "say_session",
+        "description": "Browser session cookie. Set automatically by successful signup verification, login, and Google sign-in."
+      },
+      "BearerSession": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque session token",
+        "description": "Mobile alternative: use the same opaque token value issued in the say_session cookie."
+      }
+    },
+    "parameters": {
+      "Username": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "Username to check. Normalized case-insensitively.",
+        "schema": { "type": "string", "minLength": 3, "maxLength": 20 },
+        "example": "utee"
+      },
+      "SeasonOrdinal": {
+        "name": "ordinal",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "integer", "minimum": 1 },
+        "example": 12
+      },
+      "SeasonQuery": {
+        "name": "season",
+        "in": "query",
+        "required": false,
+        "description": "Season ordinal or current. Defaults to current.",
+        "schema": { "type": "string", "default": "current" },
+        "example": "12"
+      },
+      "MarketId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" },
+        "example": "11111111-1111-4111-a111-111111111111"
+      }
+    },
+    "requestBodies": {
+      "VersionReason": {
+        "required": true,
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VersionReasonRequest" }, "example": { "version": 3, "reason": "Review completed." } } }
+      },
+      "VersionReasonRequired": {
+        "required": true,
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VersionReasonRequiredRequest" }, "example": { "version": 3, "reason": "Please specify the official source for a postponed fixture." } } }
+      }
+    },
+    "responses": {
+      "NoContent": { "description": "Operation succeeded; no response body." },
+      "SignedIn": {
+        "description": "Authenticated user and optional season grant. Also sets Set-Cookie: say_session=…; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax.",
+        "headers": { "Set-Cookie": { "schema": { "type": "string" }, "description": "Session cookie; sensitive credential. Do not share or commit its value." } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SignedInResponse" }, "example": { "user": { "id": "6f1c40a1-6fd8-4ed1-bdfb-64fa5cf731ef", "username": "utee", "email": "utee@example.com", "email_verified": true, "has_password": true, "google_linked": false, "username_changeable_at": "2026-11-02T23:00:00Z", "created_at": "2026-10-19T21:02:11Z" }, "grant": { "amount": 1000, "season_ordinal": 12, "season_ends_at": "2026-11-03T23:00:00Z" } } } }
+      },
+      "BadRequest": { "$ref": "#/components/responses/Error400" },
+      "OtpError": {
+        "description": "OTP_INVALID or OTP_EXPIRED.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "examples": { "invalid": { "value": { "error": { "code": "OTP_INVALID", "message": "That code is not right.", "attempts_left": 3 } } }, "expired": { "value": { "error": { "code": "OTP_EXPIRED", "message": "That code has expired. Send a new one." } } } } } }
+      },
+      "OtpLocked": { "description": "Too many incorrect OTP attempts.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "OTP_LOCKED", "message": "Too many wrong codes. Send a new one." } } } } },
+      "PendingExpired": { "description": "Signup, Google pending signup, or OAuth state token expired.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "PENDING_EXPIRED", "message": "That step expired. Start again." } } } } },
+      "InvalidCredentials": { "description": "Email or password is incorrect.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "INVALID_CREDENTIALS", "message": "Email or password is wrong." } } } } },
+      "EmailNotVerified": { "description": "Correct password but email verification is required. The optional signup_token advances directly to verification.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "EMAIL_NOT_VERIFIED", "message": "Verify your email to continue.", "signup_token": "signup_opaque_token" } } } } },
+      "Unauthenticated": { "description": "No valid session cookie or Bearer session token.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "UNAUTHENTICATED", "message": "Please sign in." } } } } },
+      "Forbidden": { "description": "Caller lacks the required platform role.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "FORBIDDEN", "message": "You do not have permission to do that." } } } } },
+      "ForbiddenRole": { "description": "Caller lacks the required market role.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "FORBIDDEN_ROLE", "message": "Your role does not allow this action." } } } } },
+      "NotFound": { "description": "Resource not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "NOT_FOUND", "message": "That market could not be found." } } } } },
+      "SeasonNotFound": { "description": "Season does not exist or there is no active season.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "SEASON_NOT_FOUND", "message": "There is no such season." } } } } },
+      "Conflict": { "description": "State conflict, stale version, duplicate identity, or invalid transition.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "examples": { "staleVersion": { "value": { "error": { "code": "STALE_VERSION", "message": "This market changed. Reload it first." } } }, "invalidTransition": { "value": { "error": { "code": "INVALID_TRANSITION", "message": "That action is not available in this state." } } }, "selfApproval": { "value": { "error": { "code": "SELF_APPROVAL_FORBIDDEN", "message": "Someone else must approve this request." } } } } } } },
+      "StaleSnapshot": { "description": "The pagination snapshot is stale; restart from the first page.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "STALE_SNAPSHOT", "message": "This page expired. Start from the first page." } } } } },
+      "ValidationError": { "description": "Input validation error. Some field errors are included in error.fields.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "BAD_REQUEST", "message": "Check the highlighted fields.", "fields": [{ "field": "question", "reason": "Question is required." }] } } } } },
+      "RateLimited": { "description": "Rate limit exceeded; retry after retry_after seconds and observe Retry-After.", "headers": { "Retry-After": { "schema": { "type": "integer" }, "example": 60 } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "RATE_LIMITED", "message": "Please wait before trying again.", "retry_after": 60 } } } } },
+      "Unavailable": { "description": "Temporary service failure. Internal database/provider details are not returned.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "UNAVAILABLE", "message": "Something went wrong. Please try again." } } } } },
+      "Error400": { "description": "Malformed request or invalid input.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }, "example": { "error": { "code": "BAD_REQUEST", "message": "The request could not be understood." } } } } }
+      ,
+      "MarketMutation": { "description": "Market record after the successful lifecycle transition.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminMarket" }, "examples": { "market": { "$ref": "#/components/examples/AdminMarket" } } } } }
+    },
+    "examples": {
+      "AdminMarket": {
+        "value": {
+          "id": "11111111-1111-4111-a111-111111111111",
+          "slug": "will-enyimba-win",
+          "question": "Will Enyimba win the Sunday fixture?",
+          "category_id": "00000000-0000-4000-a000-000000000101",
+          "season_id": "2f9be311-29b3-4ee7-b405-6ca0fe1a51e0",
+          "resolution_source_id": "e1111111-1111-4111-a111-111111111111",
+          "rules": { "yes_if": "The official final result is an Enyimba win.", "no_if": "The official final result is not an Enyimba win.", "edge_cases": "A postponed fixture is reviewed for a void." },
+          "open_at": "2026-10-28T15:00:00.000Z",
+          "close_at": "2026-10-30T15:00:00.000Z",
+          "resolve_by": "2026-11-02T18:00:00.000Z",
+          "redemption_units": 100,
+          "min_price": 1,
+          "max_price": 99,
+          "tick": 1,
+          "max_order_qty": 10000,
+          "fee_units": 1,
+          "min_order_notional": 2,
+          "liquidity_request": 0,
+          "featured_rank": 0,
+          "opening_price": 50,
+          "status": "DRAFT",
+          "version": 1,
+          "terms_version": 0,
+          "terms_hash": null,
+          "created_by": "6f1c40a1-6fd8-4ed1-bdfb-64fa5cf731ef",
+          "submitted_by": null,
+          "approved_by": null,
+          "created_at": "2026-10-27T19:00:00.000Z",
+          "opened_at": null,
+          "closed_at": null,
+          "suspended_at": null,
+          "suspend_reason": "",
+          "status_note": ""
+        }
+      }
+    },
+    "schemas": {
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string", "description": "Stable machine-readable error code." },
+              "message": { "type": "string", "description": "Safe, user-facing message." },
+              "retry_after": { "type": "integer", "minimum": 0 },
+              "attempts_left": { "type": "integer", "minimum": 0 },
+              "signup_token": { "type": "string" },
+              "fields": { "type": "array", "items": { "type": "object", "properties": { "field": { "type": "string" }, "reason": { "type": "string" } }, "required": ["field", "reason"] } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Readiness": {
+        "type": "object",
+        "required": ["status", "checks"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok", "unavailable", "shutting_down"] },
+          "checks": { "type": "object", "additionalProperties": { "type": "string", "enum": ["ok", "failing", "timeout"] } }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["id", "username", "email", "email_verified", "has_password", "google_linked", "username_changeable_at", "created_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "username": { "type": "string", "example": "utee" },
+          "email": { "type": ["string", "null"], "format": "email" },
+          "email_verified": { "type": "boolean" },
+          "has_password": { "type": "boolean" },
+          "google_linked": { "type": "boolean" },
+          "username_changeable_at": { "type": "string", "format": "date-time" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Grant": {
+        "type": ["object", "null"],
+        "required": ["amount", "season_ordinal", "season_ends_at"],
+        "properties": {
+          "amount": { "type": "integer", "example": 1000 },
+          "season_ordinal": { "type": "integer", "example": 12 },
+          "season_ends_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "SignedInResponse": {
+        "type": "object",
+        "required": ["user", "grant"],
+        "properties": {
+          "user": { "$ref": "#/components/schemas/User" },
+          "grant": { "$ref": "#/components/schemas/Grant" }
+        }
+      },
+      "UsernameCheck": {
+        "type": "object",
+        "required": ["username", "available", "suggestions"],
+        "properties": {
+          "username": { "type": "string" },
+          "available": { "type": "boolean" },
+          "reason": { "type": "string", "enum": ["USERNAME_INVALID", "USERNAME_RESERVED", "USERNAME_TAKEN"] },
+          "suggestions": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "UsernameHoldRequest": { "type": "object", "required": ["username"], "properties": { "username": { "type": "string", "minLength": 3, "maxLength": 20, "example": "utee" } } },
+      "UsernameHold": { "type": "object", "required": ["username", "hold_id", "expires_at"], "properties": { "username": { "type": "string" }, "hold_id": { "type": "string" }, "expires_at": { "type": "string", "format": "date-time" } } },
+      "SignupRequest": { "type": "object", "required": ["username", "hold_id", "email", "password"], "properties": { "username": { "type": "string" }, "hold_id": { "type": "string" }, "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "format": "password" } } },
+      "SignupResponse": { "type": "object", "required": ["signup_token", "email_masked", "resend_available_at"], "properties": { "signup_token": { "type": "string" }, "email_masked": { "type": "string" }, "resend_available_at": { "type": "string", "format": "date-time" } } },
+      "OtpResendRequest": { "type": "object", "required": ["purpose"], "properties": { "signup_token": { "type": "string" }, "email": { "type": "string", "format": "email" }, "purpose": { "type": "string", "enum": ["verify_email", "reset_password"] } }, "oneOf": [{ "required": ["signup_token"], "properties": { "purpose": { "const": "verify_email" } } }, { "required": ["email"], "properties": { "purpose": { "const": "reset_password" } } }] },
+      "ResendResponse": { "type": "object", "required": ["resend_available_at"], "properties": { "resend_available_at": { "type": "string", "format": "date-time" } } },
+      "OtpVerifyRequest": { "type": "object", "required": ["signup_token", "code"], "properties": { "signup_token": { "type": "string" }, "code": { "type": "string", "pattern": "^[0-9]{6}$", "example": "381204" } } },
+      "LoginRequest": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string", "format": "email" }, "password": { "type": "string", "format": "password" } } },
+      "GoogleCompleteRequest": { "type": "object", "required": ["pending_token", "username", "hold_id"], "properties": { "pending_token": { "type": "string" }, "username": { "type": "string" }, "hold_id": { "type": "string" } } },
+      "EmailRequest": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "format": "email" } } },
+      "PasswordResetRequest": { "type": "object", "required": ["email", "code", "new_password"], "properties": { "email": { "type": "string", "format": "email" }, "code": { "type": "string", "pattern": "^[0-9]{6}$" }, "new_password": { "type": "string", "minLength": 8, "maxLength": 128, "format": "password" } } },
+      "ChangePasswordRequest": { "type": "object", "required": ["current_password", "new_password"], "properties": { "current_password": { "type": "string", "format": "password" }, "new_password": { "type": "string", "minLength": 8, "maxLength": 128, "format": "password" } } },
+      "Season": {
+        "type": "object",
+        "required": ["id", "ordinal", "status", "starts_at", "ends_at", "day", "days_total", "timezone", "server_time"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "ordinal": { "type": "integer" },
+          "status": { "type": "string", "enum": ["SCHEDULED", "ACTIVE", "CLOSING", "FINALIZED"] },
+          "starts_at": { "type": "string", "format": "date-time" },
+          "ends_at": { "type": "string", "format": "date-time" },
+          "day": { "type": "integer" },
+          "days_total": { "type": "integer", "const": 14 },
+          "timezone": { "type": "string", "example": "Africa/Lagos" },
+          "server_time": { "type": "string", "format": "date-time" }
+        }
+      },
+      "SeasonDetail": { "allOf": [{ "$ref": "#/components/schemas/Season" }, { "type": "object", "required": ["finalized"], "properties": { "finalized": { "type": "boolean" }, "provisional_reason": { "type": "string" } } }] },
+      "Balance": {
+        "type": "object",
+        "required": ["season", "available", "held", "starting_grant"],
+        "properties": {
+          "season": { "type": "object", "required": ["ordinal", "status"], "properties": { "ordinal": { "type": "integer" }, "status": { "type": "string" } } },
+          "available": { "type": "integer", "minimum": 0 },
+          "held": { "type": "integer", "minimum": 0 },
+          "starting_grant": { "type": ["integer", "null"] }
+        }
+      },
+      "LedgerShare": { "type": "object", "required": ["asset", "delta", "held_delta"], "properties": { "asset": { "type": "string" }, "delta": { "type": "integer" }, "held_delta": { "type": "integer" } } },
+      "LedgerItem": {
+        "type": "object",
+        "required": ["id", "at", "kind", "delta", "held_delta", "available_after", "held_after", "ref", "shares", "meta"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "at": { "type": "string", "format": "date-time" },
+          "kind": { "type": "string", "example": "SEASON_GRANT" },
+          "delta": { "type": "integer" },
+          "held_delta": { "type": "integer" },
+          "available_after": { "type": ["integer", "null"] },
+          "held_after": { "type": ["integer", "null"] },
+          "ref": { "type": "object", "required": ["type", "id"], "properties": { "type": { "type": "string" }, "id": { "type": "string" } } },
+          "shares": { "type": "array", "items": { "$ref": "#/components/schemas/LedgerShare" } },
+          "meta": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "LedgerPage": { "type": "object", "required": ["items", "next_cursor"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/LedgerItem" } }, "next_cursor": { "type": ["string", "null"] } } },
+      "Summary": { "type": "object", "required": ["season", "balance"], "properties": { "season": { "oneOf": [{ "$ref": "#/components/schemas/Season" }, { "type": "null" }] }, "balance": { "oneOf": [{ "$ref": "#/components/schemas/Balance" }, { "type": "null" }] } } },
+      "RunAccepted": { "type": "object", "required": ["run_id"], "properties": { "run_id": { "type": "string", "format": "uuid" } } },
+      "ReconciliationStatus": {
+        "type": "object",
+        "required": ["trading_halted", "run"],
+        "properties": {
+          "trading_halted": { "type": "object", "required": ["halted", "reason", "changed_at"], "properties": { "halted": { "type": "boolean" }, "reason": { "type": "string" }, "changed_at": { "type": "string", "format": "date-time" } } },
+          "run": { "oneOf": [{ "$ref": "#/components/schemas/ReconciliationRun" }, { "type": "null" }] }
+        }
+      },
+      "ReconciliationRun": {
+        "type": "object",
+        "required": ["id", "scope", "status", "checks", "ok"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "scope": { "type": "string" },
+          "status": { "type": "string" },
+          "checks": { "type": "array", "items": { "type": "object", "required": ["name", "status", "count", "detail"], "properties": { "name": { "type": "string" }, "status": { "type": "string" }, "count": { "type": "integer" }, "detail": { "type": "string" } } } },
+          "ok": { "type": ["boolean", "null"] },
+          "finished_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ReasonRequest": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string", "minLength": 3, "maxLength": 500 } } },
+      "Category": { "type": "object", "required": ["id", "name", "icon", "open_count"], "properties": { "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "icon": { "type": "string" }, "open_count": { "type": "integer", "minimum": 0 } } },
+      "MarketCard": {
+        "type": "object",
+        "required": ["id", "slug", "question", "category", "status", "closes_at", "closing_soon", "redemption_units", "status_note", "last_price", "chance_pct", "yes_ask", "no_ask", "volume_units", "change_24h"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "slug": { "type": "string" },
+          "question": { "type": "string" },
+          "category": { "type": "object", "required": ["id"], "properties": { "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "icon": { "type": "string" } } },
+          "status": { "type": "string", "enum": ["DRAFT", "REVIEW", "APPROVED", "FUNDING", "OPEN", "SUSPENDED", "CLOSED", "RESOLVING", "RESOLUTION_PENDING", "RESOLVED", "SETTLED", "REJECTED", "CHANGES_REQUESTED"] },
+          "closes_at": { "type": ["string", "null"], "format": "date-time" },
+          "closing_soon": { "type": "boolean" },
+          "redemption_units": { "type": "integer" },
+          "status_note": { "type": "string" },
+          "last_price": { "type": ["integer", "null"] },
+          "chance_pct": { "type": ["number", "null"] },
+          "yes_ask": { "type": ["integer", "null"] },
+          "no_ask": { "type": ["integer", "null"] },
+          "volume_units": { "type": ["integer", "null"] },
+          "change_24h": { "type": ["number", "null"] }
+        }
+      },
+      "MarketPage": { "type": "object", "required": ["items", "next_cursor", "generation", "as_of"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/MarketCard" } }, "next_cursor": { "type": ["string", "null"] }, "generation": { "type": "integer" }, "as_of": { "type": ["string", "null"], "format": "date-time" } } },
+      "MarketDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/MarketCard" },
+          { "type": "object", "required": ["rules", "resolve_by", "price_band", "max_order_qty", "fee_units", "terms_version", "opening_price", "created_at"], "properties": {
+            "rules": { "$ref": "#/components/schemas/Rules" },
+            "resolve_by": { "type": ["string", "null"], "format": "date-time" },
+            "price_band": { "type": "object", "required": ["min", "max", "tick"], "properties": { "min": { "type": "integer" }, "max": { "type": "integer" }, "tick": { "type": "integer" } } },
+            "max_order_qty": { "type": "integer" },
+            "fee_units": { "type": "integer" },
+            "terms_version": { "type": "integer" },
+            "opening_price": { "type": "integer" },
+            "created_at": { "type": ["string", "null"], "format": "date-time" },
+            "resolution_source": { "type": "object", "properties": { "name": { "type": "string" }, "url": { "type": "string", "format": "uri" } } },
+            "season": { "type": "object", "properties": { "ordinal": { "type": "integer" }, "ends_at": { "type": ["string", "null"], "format": "date-time" } } }
+          } }
+        ]
+      },
+      "Rules": { "type": "object", "required": ["yes_if", "no_if", "edge_cases"], "properties": { "yes_if": { "type": "string" }, "no_if": { "type": "string" }, "edge_cases": { "type": "string" } } },
+      "AdminMarket": {
+        "type": "object",
+        "required": ["id", "slug", "question", "rules", "status", "version", "terms_version", "created_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "slug": { "type": "string" },
+          "question": { "type": ["string", "null"] },
+          "category_id": { "type": ["string", "null"], "format": "uuid" },
+          "season_id": { "type": ["string", "null"], "format": "uuid" },
+          "resolution_source_id": { "type": ["string", "null"], "format": "uuid" },
+          "rules": { "$ref": "#/components/schemas/Rules" },
+          "open_at": { "type": ["string", "null"], "format": "date-time" },
+          "close_at": { "type": ["string", "null"], "format": "date-time" },
+          "resolve_by": { "type": ["string", "null"], "format": "date-time" },
+          "redemption_units": { "type": ["integer", "null"] },
+          "min_price": { "type": ["integer", "null"] },
+          "max_price": { "type": ["integer", "null"] },
+          "tick": { "type": "integer" },
+          "max_order_qty": { "type": "integer" },
+          "fee_units": { "type": "integer" },
+          "min_order_notional": { "type": "integer" },
+          "liquidity_request": { "type": ["integer", "null"] },
+          "featured_rank": { "type": ["integer", "null"] },
+          "opening_price": { "type": ["integer", "null"] },
+          "status": { "type": "string" },
+          "version": { "type": "integer" },
+          "terms_version": { "type": "integer" },
+          "terms_hash": { "type": ["string", "null"] },
+          "created_by": { "type": "string" },
+          "submitted_by": { "type": ["string", "null"] },
+          "approved_by": { "type": ["string", "null"] },
+          "created_at": { "type": ["string", "null"], "format": "date-time" },
+          "opened_at": { "type": ["string", "null"], "format": "date-time" },
+          "closed_at": { "type": ["string", "null"], "format": "date-time" },
+          "suspended_at": { "type": ["string", "null"], "format": "date-time" },
+          "suspend_reason": { "type": "string" },
+          "status_note": { "type": "string" }
+        }
+      },
+      "AdminMarketPage": { "type": "object", "required": ["items", "next_cursor", "generation"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/AdminMarket" } }, "next_cursor": { "type": ["string", "null"] }, "generation": { "type": "integer" } } },
+      "MarketWriteRequest": {
+        "type": "object",
+        "description": "Fields are optional for draft creation and PATCH. Explicit null clears a field where supported. Timestamps must be RFC 3339.",
+        "properties": {
+          "version": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string" },
+          "question": { "type": ["string", "null"] },
+          "category_id": { "type": ["string", "null"], "format": "uuid" },
+          "season_id": { "type": ["string", "null"], "format": "uuid" },
+          "resolution_source_id": { "type": ["string", "null"], "format": "uuid" },
+          "rules": { "oneOf": [{ "$ref": "#/components/schemas/Rules" }, { "type": "null" }] },
+          "open_at": { "type": ["string", "null"], "format": "date-time" },
+          "close_at": { "type": ["string", "null"], "format": "date-time" },
+          "resolve_by": { "type": ["string", "null"], "format": "date-time" },
+          "redemption_units": { "type": ["integer", "null"] },
+          "min_price": { "type": ["integer", "null"] },
+          "max_price": { "type": ["integer", "null"] },
+          "tick": { "type": ["integer", "null"] },
+          "max_order_qty": { "type": ["integer", "null"] },
+          "fee_units": { "type": ["integer", "null"] },
+          "min_order_notional": { "type": ["integer", "null"] },
+          "liquidity_request": { "type": ["integer", "null"] },
+          "featured_rank": { "type": ["integer", "null"] },
+          "opening_price": { "type": ["integer", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "VersionReasonRequest": { "type": "object", "required": ["version"], "properties": { "version": { "type": "integer", "minimum": 1 }, "reason": { "type": "string" } } },
+      "VersionReasonRequiredRequest": { "type": "object", "required": ["version", "reason"], "properties": { "version": { "type": "integer", "minimum": 1 }, "reason": { "type": "string", "minLength": 1 } } },
+      "ValidationResult": { "type": "object", "required": ["valid", "errors"], "properties": { "valid": { "type": "boolean" }, "errors": { "type": "array", "items": { "type": "object", "required": ["code", "field", "message"], "properties": { "code": { "type": "string" }, "field": { "type": "string" }, "message": { "type": "string" } } } } } },
+      "AdminSeason": { "type": "object", "required": ["id", "ordinal", "status", "starts_at", "ends_at", "timezone"], "properties": { "id": { "type": "string", "format": "uuid" }, "ordinal": { "type": "integer" }, "status": { "type": "string", "enum": ["ACTIVE", "SCHEDULED"] }, "starts_at": { "type": "string", "format": "date-time" }, "ends_at": { "type": "string", "format": "date-time" }, "timezone": { "type": "string" } } },
+      "ResolutionSource": { "type": "object", "required": ["id", "name", "url_pattern", "kind", "approved"], "properties": { "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "url_pattern": { "type": "string", "format": "uri" }, "kind": { "type": "string", "enum": ["html", "json"] }, "approved": { "type": "boolean" } } },
+      "ResolutionSourceRequest": { "type": "object", "required": ["name", "url_pattern", "kind"], "properties": { "name": { "type": "string", "minLength": 1 }, "url_pattern": { "type": "string", "format": "uri" }, "kind": { "type": "string", "enum": ["html", "json"] } } }
+    }
+  }
+}

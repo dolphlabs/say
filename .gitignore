@@ -13,3 +13,5 @@ __pycache__/
 loadtest/server.log
 loadtest/last-run.txt
 .toolchain/
+packages/say-stream/dist/
+packages/say-stream/node_modules/

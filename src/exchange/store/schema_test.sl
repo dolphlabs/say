@@ -7,7 +7,7 @@ import "strings";
 import "time";
 import "zokor";
 import "../domain" as core;
-import "../service" as exchange;
+import "../service" as service;
 import "../../platform/db" as db;
 import "../../platform/cache" as cache;
 
@@ -95,7 +95,7 @@ fn schema_final_arg(r: SchemaRig,ref: str) -> FinalArg {
     let created=core.new_book(schema_policy(r),4,0); guard let b=created else { panic("book"); }
     let w=core.new_workspace(&b,4);
     let cmd=core.Command { kind:"Snapshot",seq:1,ref:ref,order:core.empty_order(),order_id:"",account_id:"",system:true,reason:"" };
-    assert(core.plan(&b,cmd,&mut w)==""); let converted=exchange.record(&b,&mut w); guard let record=converted else { panic("record"); }
+    assert(core.plan(&b,cmd,&mut w)==""); let converted=service.record(&b,&mut w); guard let record=converted else { panic("record"); }
     return FinalArg { rig:r,ref:ref,input:json.encode(cmd),record:json.encode(record),previous:record.prev_hash,next:record.state_hash,node:r.node,epoch:1,pause:false,null_seq:false };
 }
 
@@ -158,5 +158,218 @@ fn test_legacy_publisher_does_not_claim_private_runtime_events() {
     let published=db.publish_outbox(db.Db { pool:r.app },cache.in_memory(),10,10000000000); guard let count=published else let e=err_of(published) { panic(e); }
     assert(count==1);
     assert(schema_int(r.owner,"select count(*)::bigint as value from outbox_events where audience='account' and published_at is null",[])==1);
+    schema_close(r);
+}
+
+fn test_runtime_ownership_renews_fences_and_releases_leases() {
+    guard let r=schema_rig() else { return; }
+    let ownership=service.new_ownership(ownership_store(new_postgres(r.app,10000000000)));
+    let next_node=schema_uuid(r);
+    let registered=service.register_node(ownership,next_node,"successor",15);
+    guard let did_register=registered else let e=err_of(registered) { panic(e); }
+    assert(did_register);
+
+    let same_node=service.acquire(ownership,r.market,r.node,10);
+    guard let same_claim=same_node else let e=err_of(same_node) { panic(e); }
+    assert(!same_claim.acquired && same_claim.renewed && same_claim.epoch==1);
+
+    let competing=service.acquire(ownership,r.market,next_node,10);
+    guard let active_claim=competing else let e=err_of(competing) { panic(e); }
+    assert(!active_claim.acquired && !active_claim.renewed && active_claim.node_id==r.node);
+
+    schema_exec(r.owner,"update market_owners set lease_until=clock_timestamp()-interval '1 second' where market_id=$1::uuid",[pg.arg_text(r.market)]);
+    let takeover=service.acquire(ownership,r.market,next_node,10);
+    guard let new_claim=takeover else let e=err_of(takeover) { panic(e); }
+    assert(new_claim.acquired && !new_claim.renewed && new_claim.epoch==2);
+
+    let stale_release=service.release(ownership,r.market,r.node,1);
+    guard let stale_released=stale_release else let e=err_of(stale_release) { panic(e); }
+    assert(!stale_released);
+
+    let no_markets: [str]=[];
+    let no_epochs: [int]=[];
+    let node_heartbeat=service.heartbeat(ownership,next_node,15,no_markets,no_epochs);
+    guard let live=node_heartbeat else let e=err_of(node_heartbeat) { panic(e); }
+    assert(live.node_live && len(live.markets)==0);
+    let market_heartbeat=service.heartbeat(ownership,next_node,15,[r.market],[2]);
+    guard let renewed=market_heartbeat else let e=err_of(market_heartbeat) { panic(e); }
+    assert(renewed.node_live && len(renewed.markets)==1);
+    assert(renewed.markets[0].market_id==r.market && renewed.markets[0].renewed);
+
+    schema_exec(r.owner,"update markets set owner_epoch=3 where id=$1::uuid",[pg.arg_text(r.market)]);
+    let mismatched_heartbeat=service.heartbeat(ownership,next_node,15,[r.market],[2]);
+    guard let mismatch= mismatched_heartbeat else let e=err_of(mismatched_heartbeat) { panic(e); }
+    assert(mismatch.node_live && len(mismatch.markets)==1 && !mismatch.markets[0].renewed);
+    let mismatched_claim=service.acquire(ownership,r.market,next_node,10);
+    if let _claim=mismatched_claim { panic("owner epoch mismatch was accepted"); }
+    else let e=err_of(mismatched_claim) { assert(e=="OWNER_EPOCH_MISMATCH",e); }
+    schema_exec(r.owner,"update markets set owner_epoch=2 where id=$1::uuid",[pg.arg_text(r.market)]);
+
+    let released=service.release(ownership,r.market,next_node,2);
+    guard let did_release=released else let e=err_of(released) { panic(e); }
+    assert(did_release);
+    let expired_release=service.release(ownership,r.market,next_node,2);
+    guard let did_expire=expired_release else let e=err_of(expired_release) { panic(e); }
+    assert(!did_expire);
+    schema_close(r);
+}
+
+fn test_pending_loader_uses_committed_market_command_frontier() {
+    guard let r=schema_rig() else { return; }
+    let first_ref=schema_uuid(r);
+    let first=schema_enqueue(r,first_ref,"Snapshot","frontier.first",false);
+    guard let _first=first else { panic("first command enqueue failed"); }
+    let second_ref=schema_uuid(r);
+    let second=schema_enqueue(r,second_ref,"Suspend","frontier.second",false);
+    guard let _second=second else { panic("second command enqueue failed"); }
+
+    let queue=service.new_queue(command_queue(new_postgres(r.app,10000000000)));
+    let first_batch_result=service.load_pending(queue,r.market,0,1);
+    guard let first_batch=first_batch_result else let e=err_of(first_batch_result) { panic(e); }
+    assert(len(first_batch.commands)==1);
+    assert(first_batch.commands[0].command_ref==first_ref);
+    assert(first_batch.commands[0].command_type=="Snapshot");
+    assert(first_batch.commands[0].payload=="{}");
+    assert(first_batch.frontier>=first_batch.commands[0].command_id);
+
+    let second_batch_result=service.load_pending(queue,r.market,first_batch.commands[0].command_id,64);
+    guard let second_batch=second_batch_result else let e=err_of(second_batch_result) { panic(e); }
+    assert(len(second_batch.commands)==1);
+    assert(second_batch.commands[0].command_ref==second_ref);
+    assert(second_batch.commands[0].command_type=="Suspend");
+    assert(second_batch.frontier==first_batch.frontier);
+
+    let empty_batch_result=service.load_pending(queue,r.market,second_batch.commands[0].command_id,64);
+    guard let empty_batch=empty_batch_result else let e=err_of(empty_batch_result) { panic(e); }
+    assert(len(empty_batch.commands)==0 && empty_batch.frontier==second_batch.frontier);
+    schema_close(r);
+}
+
+fn test_command_queue_store_reserves_and_enqueues_idempotently() {
+    guard let r=schema_rig() else { return; }
+    let queue=service.new_queue(command_queue(new_postgres(r.app,10000000000)));
+    let first_ref=schema_uuid(r);
+    let command=service.EnqueueCommand {
+        market_id:r.market,
+        command_ref:first_ref,
+        command_type:"Snapshot",
+        order_id:"",
+        source_key:"store.snapshot.once",
+        payload:"{}",
+        bucket_start:0
+    };
+    let first_result=service.enqueue_control(queue,command);
+    guard let first=first_result else let e=err_of(first_result) { panic(e); }
+    assert(!first.existing && first.command_ref==first_ref);
+
+    command.command_ref=schema_uuid(r);
+    let duplicate_result=service.enqueue_control(queue,command);
+    guard let duplicate=duplicate_result else let e=err_of(duplicate_result) { panic(e); }
+    assert(duplicate.existing && duplicate.command_ref==first_ref);
+    assert(schema_int(r.owner,"select count(*)::bigint as value from market_commands where market_id=$1::uuid",[pg.arg_text(r.market)])==1);
+    schema_close(r);
+}
+
+fn test_actor_writer_commits_transition_and_returns_queue_permit() {
+    guard let r=schema_rig() else { return; }
+    let ref=schema_uuid(r);
+    let command=core.Command {
+        kind:"Snapshot",seq:1,ref:ref,order:core.empty_order(),order_id:"",
+        account_id:"",system:true,reason:""
+    };
+    let queue=service.new_queue(command_queue(new_postgres(r.app,10000000000)));
+    let enqueue=service.enqueue_control(queue,service.EnqueueCommand {
+        market_id:r.market,command_ref:ref,command_type:"Snapshot",order_id:"",
+        source_key:"store.commit.snapshot",payload:json.encode(command),bucket_start:0
+    });
+    guard let _queued=enqueue else let e=err_of(enqueue) { panic(e); }
+
+    let created=core.new_book(schema_policy(r),4,0);
+    guard let book=created else { panic("book"); }
+    let workspace=core.new_workspace(&book,4);
+    assert(core.plan(&book,command,&mut workspace)=="");
+    let converted=service.record(&book,&mut workspace);
+    guard let transition=converted else { panic("transition"); }
+    let postgres=new_postgres(r.app,10000000000);
+    let committed=st_commit(postgres,transition,command,r.node,1);
+    guard let confirmed=committed else let e=err_of(committed) { panic(e); }
+    assert(confirmed);
+    assert(schema_int(r.owner,"select committed_seq as value from markets where id=$1::uuid",[pg.arg_text(r.market)])==1);
+    assert(schema_text(r.owner,"select state as value from market_commands where id=$1::uuid",[pg.arg_text(ref)])=="DONE");
+    assert(schema_int(r.owner,"select remaining as value from market_queue_budgets where market_id=$1::uuid and bucket=16",[pg.arg_text(r.market)])==2);
+    assert(schema_int(r.owner,"select committed_seq as value from market_book_views where market_id=$1::uuid",[pg.arg_text(r.market)])==1);
+    assert(schema_text(r.owner,"select payload->>'health' as value from market_book_views where market_id=$1::uuid",[pg.arg_text(r.market)])=="READY");
+    assert(schema_int(r.owner,"select (payload->>'pending_count')::bigint as value from market_book_views where market_id=$1::uuid",[pg.arg_text(r.market)])==0);
+    let hydrated=service.ready_views(book_view_store(postgres),"",10);
+    guard let views=hydrated else let e=err_of(hydrated) { panic(e); }
+    assert(len(views)==1 && views[0].market_id==r.market && views[0].owner_epoch==1);
+    assert(views[0].lease_until>views[0].as_of && views[0].health=="READY");
+    let restored=service.recover_book(recovery_store(postgres),r.market,4);
+    guard let recovered=restored else let e=err_of(restored) { panic(e); }
+    assert(recovered.last_seq==1 && core.snapshot(&recovered).state_hash==transition.state_hash);
+    schema_close(r);
+}
+
+fn test_recovery_store_loads_and_verifies_genesis_state() {
+    guard let r=schema_rig() else { return; }
+    let postgres=new_postgres(r.app,10000000000);
+    let store=recovery_store(postgres);
+    let recovered=service.recover_book(store,r.market,4);
+    guard let book=recovered else let e=err_of(recovered) { panic(e); }
+    assert(book.last_seq==0 && book.mode=="OPEN");
+    assert(core.snapshot(&book).state_hash==schema_text(r.owner,
+        "select rolling_hash as value from markets where id=$1::uuid",[pg.arg_text(r.market)]));
+    schema_close(r);
+}
+
+fn test_snapshot_store_persists_checksum_and_recovers_snapshot() {
+    guard let r=schema_rig() else { return; }
+    let postgres=new_postgres(r.app,10000000000);
+    let created=core.new_book(schema_policy(r),4,0);
+    guard let book=created else { panic("snapshot book"); }
+    let workspace=core.new_workspace(&book,4);
+    assert(core.full_hash(&book,false,&mut workspace)=="");
+    let state=core.snapshot(&book);
+    let request=service.SnapshotWrite {
+        market_id:r.market,node_id:r.node,committed_seq:0,state_hash:state.state_hash,
+        full_hash:core.digest_text(workspace.hashes.data,64),payload:json.encode(state),owner_epoch:1
+    };
+    let saved=st_save_snapshot(postgres,request);
+    guard let inserted=saved else let e=err_of(saved) { panic(e); }
+    assert(inserted);
+    assert(schema_int(r.owner,"select count(*)::bigint as value from market_snapshots where market_id=$1::uuid",[pg.arg_text(r.market)])==1);
+    let recovered=service.recover_book(recovery_store(postgres),r.market,4);
+    guard let restored=recovered else let e=err_of(recovered) { panic(e); }
+    assert(restored.last_seq==0 && core.snapshot(&restored).state_hash==state.state_hash);
+    schema_close(r);
+}
+
+fn test_read_store_executes_private_and_public_queries_and_buckets_history() {
+    guard let r=schema_rig() else { return; }
+    schema_exec(r.owner,
+        "insert into market_price_points(market_id,minute_at,open_price,high_price,low_price,close_price,volume_units,first_seq,first_index,last_seq,last_index) "+
+        "values($1::uuid,date_trunc('minute',clock_timestamp())-interval '2 minutes',40,45,38,42,10,1,0,1,0),"+
+        "($1::uuid,date_trunc('minute',clock_timestamp())-interval '1 minute',42,43,41,43,5,2,0,2,0)",
+        [pg.arg_text(r.market)]);
+    let reads=read_store(new_postgres(r.app,10000000000));
+    let account=schema_uuid(r);
+    let order=service.read_order(reads,account,schema_uuid(r));
+    guard let missing=order else let e=err_of(order) { panic(e); }
+    if let _found=missing { panic("private order query returned a row"); }
+    let orders=service.read_orders(reads,account,r.market,"all","",10);
+    guard let page=orders else let e=err_of(orders) { panic(e); }
+    assert(len(page.items)==0 && !page.has_more);
+    let cursor_page=service.read_orders(reads,account,r.market,"all",schema_uuid(r),10);
+    guard let after_cursor=cursor_page else let e=err_of(cursor_page) { panic(e); }
+    assert(len(after_cursor.items)==0 && !after_cursor.has_more);
+    let trades=service.read_trades(reads,r.market,0,0,10);
+    guard let fills=trades else let e=err_of(trades) { panic(e); }
+    assert(len(fills.items)==0 && !fills.has_more);
+    let trade_cursor=service.read_trades(reads,r.market,100,0,10);
+    guard let after_trade=trade_cursor else let e=err_of(trade_cursor) { panic(e); }
+    assert(len(after_trade.items)==0 && !after_trade.has_more);
+    let history=service.read_history(reads,r.market,3600,60);
+    guard let candles=history else let e=err_of(history) { panic(e); }
+    assert(len(candles)==2 && candles[0].open==40 && candles[0].high==45 && candles[0].volume==10);
     schema_close(r);
 }

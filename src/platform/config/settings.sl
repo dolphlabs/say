@@ -42,6 +42,22 @@ pub gc struct MarketSettings {
     history_generations: int
 }
 
+pub gc struct ExchangeSettings {
+    lease_seconds: int,
+    heartbeat_ns: int,
+    poll_ns: int,
+    reply_wait_ns: int,
+    max_waiters: int,
+    max_actors: int,
+    pending_limit: int,
+    control_limit: int,
+    heartbeat_pool_size: int,
+    snapshot_commands: int,
+    snapshot_every_ns: int,
+    view_freshness_ms: int,
+    slippage_ticks: int
+}
+
 pub gc struct Settings {
     service_name: str,
     profile: str,
@@ -58,7 +74,8 @@ pub gc struct Settings {
     auth: AuthSettings,
     email: EmailSettings,
     ledger: LedgerSettings,
-    markets: MarketSettings
+    markets: MarketSettings,
+    exchange: ExchangeSettings
 }
 
 fn default_reserved() -> str {
@@ -90,16 +107,17 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
     }
     let dev = profile == "dev" || profile == "test";
 
-    // The console sender prints codes; it exists for local work only.
+    // Console is only a fallback for local work without a SendByte key; a
+    // configured key means real delivery, so dev sends real mail too.
+    let sendbyte_key = zokor.str_or(cfg, "SENDBYTE_API_KEY", zokor.str_or(cfg, "SEND_BYTE_KEY", ""));
     let fallback_provider = "sendbyte";
-    if dev {
+    if profile == "test" || (dev && len(sendbyte_key) < 8) {
         fallback_provider = "console";
     }
     let provider = zokor.optional_one_of(cfg, "EMAIL_PROVIDER", ["sendbyte", "console"], fallback_provider);
     if provider == "console" && !dev {
         note(cfg, "EMAIL_PROVIDER", "console prints one-time codes and is allowed only in the dev and test profiles");
     }
-    let sendbyte_key = zokor.str_or(cfg, "SENDBYTE_API_KEY", zokor.str_or(cfg, "SEND_BYTE_KEY", ""));
     if provider == "sendbyte" && len(sendbyte_key) < 8 {
         note(cfg, "SENDBYTE_API_KEY", "is required when EMAIL_PROVIDER is sendbyte");
     }
@@ -136,6 +154,37 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
     if snapshot_every<100000000 || snapshot_every>2000000000 { note(cfg,"MARKET_SNAPSHOT_EVERY","must be 100ms–2s"); }
     if close_poll<10000000 || close_poll>1000000000 { note(cfg,"MARKET_CLOSE_POLL","must be 10ms–1s"); }
     if generations<2 || generations>128 { note(cfg,"MARKET_SNAPSHOT_GENERATIONS","must be 2–128"); }
+
+    let runtime=ExchangeSettings {
+        lease_seconds:zokor.int_or(cfg,"EXCHANGE_LEASE_SECONDS",10),
+        heartbeat_ns:zokor.duration_or(cfg,"EXCHANGE_HEARTBEAT",2000000000),
+        poll_ns:zokor.duration_or(cfg,"EXCHANGE_POLL",250000000),
+        reply_wait_ns:zokor.duration_or(cfg,"EXCHANGE_REPLY_WAIT",300000000),
+        max_waiters:zokor.int_or(cfg,"EXCHANGE_MAX_WAITERS",1024),
+        max_actors:zokor.int_or(cfg,"EXCHANGE_MAX_ACTORS",5000),
+        pending_limit:zokor.int_or(cfg,"EXCHANGE_PENDING_LIMIT",5000),
+        control_limit:zokor.int_or(cfg,"EXCHANGE_CONTROL_LIMIT",64),
+        heartbeat_pool_size:zokor.int_or(cfg,"EXCHANGE_HEARTBEAT_POOL_SIZE",2),
+        snapshot_commands:zokor.int_or(cfg,"EXCHANGE_SNAPSHOT_COMMANDS",5000),
+        snapshot_every_ns:zokor.duration_or(cfg,"EXCHANGE_SNAPSHOT_EVERY",60000000000),
+        view_freshness_ms:zokor.int_or(cfg,"EXCHANGE_VIEW_FRESHNESS_MS",1500),
+        slippage_ticks:zokor.int_or(cfg,"EXCHANGE_SLIPPAGE_TICKS",3)
+    };
+    if runtime.lease_seconds<3 || runtime.lease_seconds>30 { note(cfg,"EXCHANGE_LEASE_SECONDS","must be 3–30"); }
+    if runtime.heartbeat_ns<100000000 || runtime.heartbeat_ns>runtime.lease_seconds*1000000000/3 {
+        note(cfg,"EXCHANGE_HEARTBEAT","must be at least 100ms and at most one third of the lease");
+    }
+    if runtime.poll_ns<1000000 || runtime.poll_ns>1000000000 { note(cfg,"EXCHANGE_POLL","must be 1ms–1s"); }
+    if runtime.reply_wait_ns<0 || runtime.reply_wait_ns>300000000 { note(cfg,"EXCHANGE_REPLY_WAIT","must be 0–300ms"); }
+    if runtime.max_waiters<1 || runtime.max_waiters>10000 { note(cfg,"EXCHANGE_MAX_WAITERS","must be 1–10000"); }
+    if runtime.max_actors<1 || runtime.max_actors>10000 { note(cfg,"EXCHANGE_MAX_ACTORS","must be 1–10000"); }
+    if runtime.pending_limit<1 || runtime.pending_limit>100000 { note(cfg,"EXCHANGE_PENDING_LIMIT","must be 1–100000"); }
+    if runtime.control_limit<1 || runtime.control_limit>10000 { note(cfg,"EXCHANGE_CONTROL_LIMIT","must be 1–10000"); }
+    if runtime.heartbeat_pool_size<1 || runtime.heartbeat_pool_size>8 { note(cfg,"EXCHANGE_HEARTBEAT_POOL_SIZE","must be 1–8"); }
+    if runtime.snapshot_commands<1 || runtime.snapshot_commands>100000 { note(cfg,"EXCHANGE_SNAPSHOT_COMMANDS","must be 1–100000"); }
+    if runtime.snapshot_every_ns<1000000000 || runtime.snapshot_every_ns>3600000000000 { note(cfg,"EXCHANGE_SNAPSHOT_EVERY","must be 1s–1h"); }
+    if runtime.view_freshness_ms<100 || runtime.view_freshness_ms>10000 { note(cfg,"EXCHANGE_VIEW_FRESHNESS_MS","must be 100–10000"); }
+    if runtime.slippage_ticks<0 || runtime.slippage_ticks>1000 { note(cfg,"EXCHANGE_SLIPPAGE_TICKS","must be 0–1000"); }
 
     return Settings {
         service_name: zokor.str_or(cfg, "SERVICE_NAME", "say"),
@@ -180,6 +229,7 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
             recon_every_ns: zokor.duration_or(cfg, "RECON_EVERY", 300000000000),
             metrics_token: metrics_token
         },
-        markets: MarketSettings { snapshot_every_ns:snapshot_every,close_poll_ns:close_poll,close_workers:market_workers,history_generations:generations }
+        markets: MarketSettings { snapshot_every_ns:snapshot_every,close_poll_ns:close_poll,close_workers:market_workers,history_generations:generations },
+        exchange:runtime
     };
 }

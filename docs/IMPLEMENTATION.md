@@ -20,7 +20,29 @@ Prompt 05 groundwork: registry opening now creates the market's collateral
 and outcome system wallets in the same transaction. Migration 010 adds a
 restricted queue-permit lock function so the runtime role can follow the
 documented queue-before-wallet lock order without direct budget-table access.
-The actor, durable admission, commit/recovery and endpoint work remain pending.
+Fresh node incarnations, conditional heartbeat/lease renewal, same-node
+ownership renewal, expired-owner epoch fencing and release are implemented
+and wired into app startup. A command-queue store now reserves permits and
+enqueues control commands transactionally, and captures committed ID
+frontiers for bounded ordered pending reads. A commit-gated single-transition
+actor service primitive and a fenced Postgres transaction adapter are
+present. The adapter commits ledger postings, orders, fills, positions,
+statistics, audience-scoped outbox events and persisted top-50 book-view
+payloads. Durable Place admission now validates canonical intent, computes
+server-owned hold facts, reserves queue capacity, posts holds, creates the
+admitted order and command, and records the idempotency link in one
+transaction. Durable Cancel enqueue is implemented. The supervisor now assigns markets,
+renews leases in bounded batches, recovers books, drains durable commands and
+publishes local immutable views. Authenticated Place/Cancel and private order
+read routes, plus public book/trades/history routes, are present. A bounded
+snapshot writer captures applied state; recovery verifies supported snapshot
+checksums and covered journal hashes, tries older snapshots, and replays the
+decided suffix, with genesis fallback where the journal remains bounded.
+Cross-node view hydration and recovery projection reconciliation are wired;
+crash/load acceptance remains pending. The Postgres/Redis integration suite now passes
+against the test stack with separate owner and app-role connections. The
+three ledger reconciliation checks for outcome supply, collateral and
+per-order fees have SQL implementations and are covered by store tests.
 
 Implementation resolves design clarifications within the requested policies;
 any remaining source/provider or operational dependency will be recorded
@@ -68,9 +90,25 @@ configured for1M per ordinary run and100 separately seeded 1M nightly shards;
 no remote CI execution or deployment is claimed.
 
 
-Latest validation: `make check` passed, including `zokor check` (28 packages),
-the package tests, and build. Focused PostgreSQL exchange-store tests (4)
-and market-store tests (5) passed. `make test-integration` passed the
-exchange and registry checks plus 28 ledger-store tests, but the runner
-terminated the full suite during the next package after the ledger tests took
-218 seconds; the complete integration suite is not yet verified.
+Latest integration validation: `make test-runtime` passed all 8 acceptance
+tests in an isolated PostgreSQL and Redis environment, including financial HTTP
+modes (MINT, TRANSFER_YES, TRANSFER_NO, MERGE), golden cases A–J (48 commands),
+cross-market budget concurrency (200 parallel buys across 10 markets with zero
+overdraft: S 410 held from S 427, S 17 free), cross-node genesis view hydration,
+and all six crash windows (W1 admission kill, W2 commit kill, W3 outbox kill,
+W4 lease expiration before final guard rejected by PostgreSQL, W5 Redis append
+ack loss with ordered deduplication, and W6 client timeout replay).
+
+All five load profiles in `make bench-runtime` (`tools/runtime/load.py --profile all`)
+passed and are recorded in `docs/exchange/runtime-load-results.json`:
+- `hot`: 192 admitted, 192 completed, 0 rejected, 0 pending, 0 degraded, health p99 5.9ms, peak RSS 28.5MB, drain 3.6s, reconciliation passed.
+- `distributed_1000`: 1,000 markets, 401 admitted, 403 completed, 0 rejected, 0 pending, 0 degraded, health p99 42.7ms, peak RSS 403.9MB, drain 8.8s, reconciliation passed.
+- `cancel_storm`: 20 markets, 1,851 completed, 0 rejected, 0 pending, 0 degraded, health p99 4.6ms, peak RSS 43.6MB, drain 4.3s, reconciliation passed.
+- `postgres_50ms`: 10 markets with 50ms latency injection, 104 admitted, 104 completed, 0 rejected, 0 pending, 0 degraded, health p99 7.4ms, peak RSS 41.1MB, drain 1.8s, reconciliation passed.
+- `redis_outage_60s`: 60.0s Redis outage, 489 admitted, 490 completed, 0 rejected, 0 pending, 0 degraded, outbox drained cleanly in 36.2s, reconciliation passed.
+
+Differential verification (`tools/runtime/differential.py`) validated 1,000
+commands across 10 markets in all 4 execution modes (240 MERGE, 90 TRANSFER_YES,
+90 MINT, 80 TRANSFER_NO) with 10/10 matching sequence recovery hashes and
+complete ledger reconciliation.
+

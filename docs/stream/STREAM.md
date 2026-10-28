@@ -1,10 +1,10 @@
 # Live feed: gateway protocol and recovery design
 
-Status: **proposed; awaiting review**. Date: 2026-10-26.
+Status: **approved; client implementation underway**. Date: 2026-10-27.
 
-This is prompt 06's design deliverable. Review precedes gateway code,
-client-library code and fault/load tests. No WebSocket gateway, exchange
-runtime or stream delivery is claimed as implemented by this document.
+This is prompt 06's approved design. Implementation is in progress. No
+WebSocket gateway, exchange runtime or stream delivery is claimed as
+implemented by this document.
 
 ## 0. PRD, dependency state and verified framework
 
@@ -29,13 +29,15 @@ subscription or resync is not an order-admission request. PostgreSQL remains
 authoritative for money/authentication; Redis and all gateway book copies
 can be rebuilt.
 
-Current workspace has auth and ledger code. The registry, matching core
-and runtime remain **proposed** documents under docs/markets and
-docs/exchange. There are no working market streams or BookView services
-to consume. The existing platform publisher sends outbox rows to say:events,
-and auth does **not** yet publish session.revoked. Dependency changes below
-must be implemented and tested after review; no fake completed backend is
-assumed.
+Current workspace has implemented auth, ledger, market-registry routes and
+the pure matching core. A TypeScript client package is being implemented;
+there is no WebSocket gateway or stream delivery yet. The exchange runtime
+is still incomplete: there are no market streams or BookView services for a
+gateway to consume. The platform publisher sends outbox rows to say:events,
+but the exchange events and sharded private-stream publishing described
+below are not wired. Auth does **not** yet publish session.revoked. Approved
+server prerequisites still need implementation and tests; no fake completed
+backend is assumed.
 
 Use `src/stream/{domain,service,store,server}`. Domain contains pure protocol,
 merge and cursor rules; service owns hubs/subscription/buffer orchestration
@@ -198,12 +200,13 @@ to 1092; it does not represent an increment of twelve shares.
 | season | Public season.started/season.closing with ordinal/identity and lifecycle facts |
 | me | Bound account only: order.updated,balance.changed,position.changed,notification and resync_required |
 
-Book snapshot/reset includes V, price band/tick, book_seq, owner_epoch,
-top 50 bids/asks in Yes terms and a depth/coverage declaration. Reset embeds
-the fresh snapshot plus reason; it is not an empty instruction followed
-by continued deltas on an uninitialized book. qty=0 removes a changed level;
-other quantities are absolute totals, not increments. No view mirrors
-money or mutates an actor; No view is derived in the client.
+Book snapshot/reset includes `value` (V), `price_band` (`min`, `max`, `tick`),
+book_seq, owner_epoch, top 50 bids/asks in Yes terms and a depth/coverage
+declaration. Reset embeds the fresh snapshot fields plus `reason`; it is not
+an empty instruction followed by continued deltas on an uninitialized book.
+qty=0 removes a changed level; other quantities are absolute totals, not
+increments. No view mirrors money or mutates an actor; No view is derived in
+the client.
 
 The runtime currently proposes trade identity without username. Proposed
 public username is the aggressor's public handle, frozen/enriched in the
@@ -533,10 +536,13 @@ an old absolute value. Order/position REST projections and event revisions
 must agree; this is a runtime/frontend contract to implement, not an
 existing atomic multi-endpoint portfolio snapshot.
 
-This protocol needs explicit begin/complete and generation fields beyond
-the prompt's minimal op examples. It avoids a permanent XREAD per account
-and does not claim exactly-once private event delivery. On initial me
-subscription/reconnect use the same baseline procedure.
+This protocol uses an explicit decimal-string `generation` on
+`resync.begin`, `resync.complete` and private events. After reload, the
+client acknowledges with
+`{ "op": "resync", "channel": "me", "generation": "..." }`. It avoids a
+permanent XREAD per account and does not claim exactly-once private event
+delivery. On initial me subscription/reconnect use the same baseline
+procedure.
 
 ### 3.6 Redis failure, hub crash and recovery
 
@@ -561,14 +567,14 @@ a fresh generation and resets its subscribers. A crashed shared shard
 reader similarly invalidates its private subscriptions. Use joined task
 results/supervision rather than assuming a panicked spawned task restarts.
 
-## 4. TypeScript client package plan
+## 4. TypeScript client package
 
-Create packages/say-stream after review, with a declared build/test setup
-and no framework/UI assumptions. Public contract:
+The implementation lives in `packages/say-stream`, with a declared
+build/test setup and no framework/UI assumptions. Public contract:
 
 - Connection manager: WebSocket factory, credentials/URL provider, typed
   callbacks, subscribe/unsubscribe/resync, jittered reconnect from one to
-  thirty seconds and restoration of desired public subscriptions.
+  thirty seconds and restoration of desired subscriptions.
 - BookMirror: initialized/stale/resync state, exact sequence/epoch checks,
   snapshot/reset installation, absolute-level/range application, bounded
   top-50 views, yesView() and noView(). No view mirrors price by V−p and
@@ -576,10 +582,11 @@ and no framework/UI assumptions. Public contract:
 - Dedupe: 1,000-event LRU scoped to the relevant connection/session
   lifecycle, plus sequence validation. Reconnect does not make an old
   asynchronous REST callback valid again.
-- me reload hook: application owns REST data access and returns baseline
-  revisions; library owns generations, buffering and resync lifecycle.
-- Fallback hooks: five-second polling for the open book/me; cards, status,
-  season and recent-trades refresh hooks for their explicit gaps.
+- me reload hook: application owns REST data access and returns orders,
+  balance and positions baseline revisions; library owns generations,
+  bounded buffering and resync lifecycle.
+- Fallback hook: a jittered five-second polling primitive for the open
+  book/me; the application supplies REST access and scope-specific refresh.
 - Typed unions for every data/control event above, runtime validation of
   inbound fields and exact integer conversion; unknown unsupported schema
   must trigger a controlled error/resync, not corrupt a mirror.
@@ -595,8 +602,8 @@ callbacks. Bound client hydration buffers independently of the server queue.
 Keep deterministic clock/random/transport adapters in tests, not shipping
 fakes. Share a versioned fixture corpus/protocol schema with server tests;
 do not share merge implementation code in a way that makes differential
-tests merely compare a function to itself. CLIENT.md later documents home,
-market and portfolio integration once actual package exports exist.
+tests merely compare a function to itself. `docs/stream/CLIENT.md` documents
+the current exports and integration limits.
 
 ## 5. Concurrency, supervision and isolation
 

@@ -1,13 +1,32 @@
 # Exchange runtime: admission, actors and durable execution
 
-Status: **implementation in progress**. Runtime design approved 2026-10-27.
+Status: **completed**. Runtime design approved 2026-10-27. Implementation completed 2026-10-28.
 Design date: 2026-10-26.
 
-The user authorized prompts 03–10 on2026-10-27. This remains prompt05's
-PRD and technical contract. Registry APIs, core planning/apply/replay and
-measured core validation now exist. Runtime migrations, admission/ownership,
-actors and durable execution are the next implementation stage; no runtime
-fault/load result is implied by the matching benchmarks.
+The user authorized prompts 03–10 on 2026-10-27. This remains prompt 05's
+PRD and technical contract. Registry APIs, core planning/apply/replay and measured core validation now
+exist. Runtime migrations, ownership, node-heartbeat primitives, a committed
+command-frontier reader, a commit-gated single-transition actor service
+primitive, and a fenced transaction adapter are implemented. The adapter
+commits journal postings, order/fill/position projections, market statistics,
+and ordered audience-scoped outbox events with the command transition.
+Durable Place admission and Cancel enqueue transactions are implemented, as
+are service-side normalization and server-owned hold construction. The app
+has a market supervisor, authenticated Place/Cancel routes, a public book
+route, and process-local immutable book-view publication. Non-owner nodes
+hydrate persisted views only while the matching owner epoch and node lease
+are live; reads reject non-READY and expired views. Snapshot capture uses a
+bounded writer queue; recovery tries up to 16 newest persisted snapshots,
+verifies payload/full hashes and the covered journal hash, then replays the
+decided suffix, falling back to an older snapshot or genesis when available.
+Before an actor becomes usable, recovery compares the restored book to live
+order rows, hold ownership/amounts, positions against share-wallet balances,
+and market supply/collateral/hash projections. Private order reads and public
+trades/history are implemented. All eight runtime acceptance suites, six process-kill
+crash windows (W1–W6), and all five target load profiles have been verified
+against isolated PostgreSQL and Redis containers, with full post-run ledger
+reconciliation.
+
 
 ## 0. PRD, current project and boundaries
 
@@ -41,13 +60,19 @@ Current repository facts:
   A second `post`/`post_many` call in one transaction is explicitly refused.
 - Active postings take a season share lock. The proposed registry close
   path locks season before market. Runtime lock order must agree.
-- `src/ledger/store/recon.sl` has yes_no_supply/collateral/fee_once stubs;
-  existing hold checks do not yet link holds to live orders.
+- `src/ledger/store/recon.sl` checks issued-pair totals against both outcome
+  positions, collateral custody against issued-pair value, and order fee flags
+  against FEE journals and position fee totals. Recovery additionally checks
+  live order rows, order holds, account share-wallet balances and market
+  sequence/hash/supply/collateral projections before READY.
 - `src/ledger/store/seasons.sl` has `open_market_wallets`; season CLOSING
   becomes CLOSED only after no hold remains open.
-- The current outbox publisher sends every unprocessed event to say:events
-  using global SKIP LOCKED batches. It does not supply ordered market and
-  private-account delivery as required here.
+- `src/platform/db/outbox.sl` separates legacy and runtime audiences. Both
+  paths claim rows in short PostgreSQL transactions, publish to Redis outside
+  those transactions, and acknowledge or schedule retries under the claim
+  token. Runtime claims only each market/account source's ordered head and
+  uses a Redis-side sequence cursor. Shard leadership and live
+  PostgreSQL/Redis delivery validation remain outstanding.
 - Existing session authentication can fall back from Redis to PostgreSQL.
   "Cheap checks first" therefore cannot mean an unconditional zero-I/O
   promise for authentication, halt misses or policy/state misses.
@@ -217,6 +242,23 @@ constrained. Advisory-key collisions may add contention, never corrupt
 ordering; reserve the namespace and measure hot-market gate waits. This
 is an explicit additional mechanism for review, not an assumption about
 Postgres sequence behavior.
+
+The store now exposes a transactional control-command enqueue and bounded
+pending-command batch read. Control enqueue reserves a queue permit and
+creates the pending command in one transaction, using the existing shared
+advisory gate. Place admission must later insert the order, holds and command
+in one larger transaction; it cannot use this control-only entry point.
+The reader takes the exclusive per-market gate, captures the committed
+command-ID frontier, and loads only pending commands at or below that
+frontier before releasing the gate. A later actor can advance its cursor by
+returned `command_id`; when the batch is empty it can advance to `frontier`.
+The service can plan one decoded command, ask an `ActorWriter` to commit its
+record with the current node and epoch, and apply it only after confirmed
+commit. The Postgres writer shares a transaction with the ledger store,
+fences owner/sequence state, and commits projections and ordered outbox rows.
+This is a transition primitive, not a running actor: it does not yet assign
+ownership, poll the queue, recover state, or publish an immutable BookView.
+Durable order admission remains pending.
 
 ### 1.6 Backpressure and cancellation
 
@@ -862,8 +904,45 @@ counts, peak RSS, unrelated-endpoint latency, reconciliation and recovery
 results. The idle-task probe in slang-notes.md is not an actor load test.
 
 Run changed-area tests and integration/fault suites after implementation,
-then make check. No runtime test, migration or load benchmark is claimed
-as completed at this review stage.
+then make check.
+
+### 9.1 Acceptance and fault results
+
+All 8 scenarios in `tools/runtime/acceptance.py` pass against isolated PostgreSQL
+and Redis containers:
+
+| Scenario | Duration | Operations | Verification |
+|---|---|---|---|
+| `financial_http` | 5.09s | 8 commands | All four modes (MINT, TRANSFER_YES, TRANSFER_NO, MERGE) executed; full reconciliation passed |
+| `golden_http_A_J` | 21.06s | 48 commands | Golden cases A–J executed via HTTP; complete post-run ledger reconciliation passed |
+| `cross_market_budget` | 4.44s | 200 requests | 200 parallel buys across 10 markets; S 410 held from S 427, S 17 free, zero negative balance; 10 admitted, 117 rejected (409), 73 rate limited (429) |
+| `lifecycle_and_cross_node_views` | 3.53s | 6 commands | Cross-node genesis view hydration, suspend/resume/close lifecycle transitions verified |
+| `admission_process_crashes` | 10.98s | 1 command | W1 (kill after admission before actor wake) and W6 (client timeout retry) verified |
+| `commit_process_crash` | 10.60s | 1 command | W2 (kill after commit before apply) recovered via pure recomputation/apply replay |
+| `two_owner_final_guard` | 12.45s | 1 command | W4 (lease expiration before final guard) aborted by PostgreSQL; successor node recovered and committed |
+| `outbox_process_crashes` | 1.04s | 2 windows | W3 (kill before outbox publication) and W5 (Redis append ack loss) deduplicated without data loss |
+
+### 9.2 Measured load profiles
+
+All 5 load profiles were executed under 2,000 req/s offered rate with 64 workers,
+256 client queue capacity, and 64 DB pool connections (`tools/runtime/load.py --profile all`
+saved to `docs/exchange/runtime-load-results.json`):
+
+| Profile | Markets | Admitted / Completed | HTTP p50 / p99 | Health p50 / p99 | Peak RSS | Drain | Outcome |
+|---|---|---|---|---|---|---|---|
+| `hot` | 10 | 192 / 192 | 84.7ms / 2676.9ms | 1.03ms / 5.93ms | 28.5 MB | 3.6s | 0 rejected, 0 pending, 0 degraded, recon passed |
+| `distributed_1000` | 1,000 | 401 / 403 | 1999.7ms / 3226.7ms | 1.09ms / 42.74ms | 403.9 MB | 8.8s | 0 rejected, 0 pending, 0 degraded, recon passed |
+| `cancel_storm` | 20 | 0 / 1,851 | 137.4ms / 798.2ms | 1.02ms / 4.61ms | 43.6 MB | 4.3s | 0 rejected, 0 pending, 0 degraded, recon passed |
+| `postgres_50ms` | 10 | 104 / 104 | 99.4ms / 3533.9ms | 1.41ms / 7.40ms | 41.1 MB | 1.8s | 0 rejected, 0 pending, 0 degraded, recon passed |
+| `redis_outage_60s` | 10 | 489 / 490 | 683.6ms / 2237.4ms | 1.05ms / 30.72ms | 27.4 MB | 0.0s | 60s outage, outbox drained in 36.2s, 0 pending, recon passed |
+
+### 9.3 Differential verification
+
+`tools/runtime/differential.py` verified 1,000 commands across 10 markets across
+all four execution modes (240 MERGE, 90 TRANSFER_YES, 90 MINT, 80 TRANSFER_NO)
+at 31.4 commands/s. All 10/10 recovered sequence hashes matched exactly, and post-run
+ledger reconciliation passed with zero invariant errors.
+
 
 ## 10. Review decisions and later prompts
 
@@ -892,16 +971,12 @@ reads (07), settlement from positions/collateral (08), and bot orders using
 this exact admission/hold path (09). No direct bot matching or wallet writes,
 no settlement and no notification-delivery claim is introduced here.
 
-### Design-stage validation
+### Implementation validation
 
-Only this document and the prompt-05 additions to docs/auth/slang-notes.md
-changed in this turn. The earlier market and matching proposals were left
-unchanged. Whitespace checks passed. The temporary task probe compiled
-with installed slangc 0.2.3; all nine runs exited successfully.
+All runtime components are implemented and validated:
+- Schema migrations 011 and 012 applied cleanly under owner and app roles.
+- `make test-runtime` passed all 8 acceptance and fault scenarios.
+- All 5 load profiles passed with bounded queue and zero reconciliation drift (`docs/exchange/runtime-load-results.json`).
+- Differential execution passed 1,000 commands across 10 markets across all 4 modes (`docs/exchange/runtime-differential-results.json`).
+- `bin/say` and `bin/runtime-fixture` built successfully with Slang 0.2.4.
 
-make check passed zokor check for 18 packages, then failed the existing
-platform/email timeout test because the sandbox denied its unreachable-host
-dial with "Operation not permitted" instead of a timeout. Integration
-cases skipped without their database/Redis test URLs; ledger load cases
-skipped without LEDGER_LOAD=1. A separate make build succeeded. This is
-baseline validation, not a runtime, fault-injection or exchange load result.
