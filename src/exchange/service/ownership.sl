@@ -1,11 +1,15 @@
-import "../domain" as core;
-
 pub gc struct Ownership[C] {
     store: OwnershipStore[C]
 }
 
 pub fn new_ownership[C](store: OwnershipStore[C]) -> Ownership[C] {
     return Ownership[C] { store: store };
+}
+
+pub fn candidates[C](ownership: Ownership[C], after_id: str, limit: int) -> result[[str], str] {
+    if limit < 1 || limit > 500 { return err("INVALID_CANDIDATE_LIMIT"); }
+    let discover=ownership.store.candidates;
+    return discover(ownership.store.context,after_id,limit);
 }
 
 pub fn register_node[C](ownership: Ownership[C], node_id: str, name: str, live_seconds: int) -> result[bool, str] {
@@ -51,7 +55,8 @@ pub fn release[C](ownership: Ownership[C], market_id: str, node_id: str, epoch: 
     return relinquish(ownership.store.context, market_id, node_id, epoch);
 }
 
-fn valid_uuid(value: str) -> bool {
-    let scratch = core.byte_writer(36);
-    return core.canonical_uuid(value, scratch.data);
+pub fn mark_ready[C](ownership: Ownership[C], market_id: str, node_id: str, epoch: int) -> result[bool, str] {
+    if !valid_uuid(market_id) || !valid_uuid(node_id) || epoch < 1 { return err("INVALID_LEASE"); }
+    let ready=ownership.store.mark_ready;
+    return ready(ownership.store.context,market_id,node_id,epoch);
 }

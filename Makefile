@@ -2,7 +2,7 @@ SLANGC ?= slangc
 ZOKOR ?= zokor
 COMPOSE ?= docker compose -f docker-compose.test.yml
 TEST_DATABASE_URL ?= postgres://say:say-test-only@127.0.0.1:55432/say_test?sslmode=disable
-TEST_APP_DATABASE_URL ?= postgres://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
+TEST_APP_DATABASE_URL ?= postgresql://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
 TEST_REDIS_URL ?= redis://127.0.0.1:56379
 
 .PHONY: test test-stream test-integration test-stack build run check load migrate
@@ -75,3 +75,20 @@ test-exchange: test-exchange-smoke
 
 bench-exchange:
 	python3 bench/run.py --go $(GO)
+
+RUNTIME_PYTHON ?= python3
+RUNTIME_COMMANDS ?= 100000
+
+.PHONY: runtime-tools test-runtime test-runtime-differential bench-runtime
+
+runtime-tools: build
+	$(SLANGC) tools/runtime/fixture/main.sl -o bin/runtime-fixture
+
+test-runtime: runtime-tools test-stack
+	$(RUNTIME_PYTHON) tools/runtime/acceptance.py
+
+test-runtime-differential: runtime-tools test-stack
+	$(RUNTIME_PYTHON) tools/runtime/differential.py --commands $(RUNTIME_COMMANDS)
+
+bench-runtime: runtime-tools test-stack
+	$(RUNTIME_PYTHON) tools/runtime/load.py

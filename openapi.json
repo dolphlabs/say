@@ -4,7 +4,7 @@
     "title": "say API",
     "version": "0.1.0",
     "summary": "HTTP API currently implemented by say",
-    "description": "OpenAPI collection for the implemented authentication, season, ledger, reconciliation, and market-registry HTTP APIs. Import this file into Postman, then edit the server URL for your deployment. Authenticate using the `say_session` cookie or an Authorization Bearer token. Browser authentication uses an HttpOnly, Secure, SameSite=Lax cookie. Mobile clients may use Bearer authentication. Public market and season routes need no credentials. Admin routes require a valid session and role-based authorization described on each operation. The matching core and runtime schemas exist in this repository, but order admission, book/trade REST endpoints, and the WebSocket stream are not implemented and are intentionally not advertised here. Timestamps are RFC 3339; season display timezone is Africa/Lagos. Amounts and prices are integer play-money units unless stated otherwise.",
+    "description": "OpenAPI collection for the implemented authentication, season, ledger, reconciliation, and market-registry HTTP APIs. Import this file into Postman, then edit the server URL for your deployment. Authenticate using the `say_session` cookie or an Authorization Bearer token. Browser authentication uses an HttpOnly, Secure, SameSite=Lax cookie. Mobile clients may use Bearer authentication. Public market and season routes need no credentials. Admin routes require a valid session and role-based authorization described on each operation. Order admission, authenticated order reads, public book/trade/history reads, and cancellation are included below. The WebSocket stream remains a separate runtime surface and is not specified here. Timestamps are RFC 3339; season display timezone is Africa/Lagos. Amounts and prices are integer play-money units unless stated otherwise.",
     "contact": {
       "name": "say API maintainers"
     },
@@ -19,13 +19,38 @@
     }
   ],
   "tags": [
-    { "name": "Authentication", "description": "Signup, session, password, and Google sign-in flows." },
-    { "name": "Account", "description": "Authenticated profile and account settings." },
-    { "name": "Seasons", "description": "Public season clock and season information." },
-    { "name": "Ledger", "description": "Authenticated balances, ledger history, and summary." },
-    { "name": "Operations", "description": "Admin reconciliation and trading-halt controls." },
-    { "name": "Markets", "description": "Public market discovery and detail." },
-    { "name": "Market administration", "description": "Market registry lifecycle, validation, and source management." }
+    {
+      "name": "Authentication",
+      "description": "Signup, session, password, and Google sign-in flows."
+    },
+    {
+      "name": "Account",
+      "description": "Authenticated profile and account settings."
+    },
+    {
+      "name": "Seasons",
+      "description": "Public season clock and season information."
+    },
+    {
+      "name": "Ledger",
+      "description": "Authenticated balances, ledger history, and summary."
+    },
+    {
+      "name": "Operations",
+      "description": "Admin reconciliation and trading-halt controls."
+    },
+    {
+      "name": "Markets",
+      "description": "Public market discovery and detail."
+    },
+    {
+      "name": "Market administration",
+      "description": "Market registry lifecycle, validation, and source management."
+    },
+    {
+      "name": "Exchange",
+      "description": "Order admission, private order state, and public market execution data."
+    }
   ],
   "security": [],
   "paths": {
@@ -1127,7 +1152,7 @@
         "tags": ["Market administration"],
         "summary": "Get market terms and audit history",
         "description": "Requires a valid session and market read permission. Returns the stored history document, including immutable terms, approval facts/current projections, and recent audit records.",
-        "operationId": "getMarketHistory",
+        "operationId": "getAdminMarketHistory",
         "security": [{ "SessionCookie": [] }, { "BearerSession": [] }],
         "parameters": [{ "$ref": "#/components/parameters/MarketId" }],
         "responses": {
@@ -1216,6 +1241,697 @@
           "403": { "$ref": "#/components/responses/ForbiddenRole" },
           "422": { "$ref": "#/components/responses/ValidationError" },
           "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/v1/markets/{id}/orders": {
+      "post": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Admit an order",
+        "description": "Requires a session and a UUID Idempotency-Key. Admission and holds commit atomically. The handler waits up to 300ms for committed execution, returning 200 with the private order or 202 ADMITTED. Identical retries return the same order even after closure; changing intent conflicts. Account, owner, holds and sequence facts are server-owned.",
+        "operationId": "admitOrder",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "22222222-2222-4222-a222-222222222222"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "outcome",
+                      "side",
+                      "price",
+                      "qty"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "limit",
+                        "default": "limit"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "YES",
+                          "NO"
+                        ]
+                      },
+                      "side": {
+                        "type": "string",
+                        "enum": [
+                          "BUY",
+                          "SELL"
+                        ]
+                      },
+                      "price": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "qty": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "tif": {
+                        "type": "string",
+                        "enum": [
+                          "GTC",
+                          "IOC"
+                        ],
+                        "default": "GTC"
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "outcome",
+                      "side",
+                      "spend"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "market"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "YES",
+                          "NO"
+                        ]
+                      },
+                      "side": {
+                        "const": "BUY"
+                      },
+                      "spend": {
+                        "type": "integer",
+                        "minimum": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "outcome",
+                      "side",
+                      "qty"
+                    ],
+                    "properties": {
+                      "type": {
+                        "const": "market"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "YES",
+                          "NO"
+                        ]
+                      },
+                      "side": {
+                        "const": "SELL"
+                      },
+                      "qty": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              "examples": {
+                "limitBuy": {
+                  "value": {
+                    "type": "limit",
+                    "outcome": "YES",
+                    "side": "BUY",
+                    "price": 42,
+                    "qty": 10,
+                    "tif": "GTC"
+                  }
+                },
+                "marketBuy": {
+                  "value": {
+                    "type": "market",
+                    "outcome": "YES",
+                    "side": "BUY",
+                    "spend": 500
+                  }
+                },
+                "marketSell": {
+                  "value": {
+                    "type": "market",
+                    "outcome": "NO",
+                    "side": "SELL",
+                    "qty": 5
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Durably admitted; execution is pending.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "command_id": "44444444-4444-4444-a444-444444444444",
+                  "status": "ADMITTED",
+                  "existing": false
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Committed execution, including resting or rejected results. Includes private order fields, command_id and existing.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "status": "PARTIAL",
+                  "outcome": "YES",
+                  "side": "BUY",
+                  "price": 42,
+                  "qty": 10,
+                  "remaining": 4,
+                  "filled": 6,
+                  "cancelled": 0,
+                  "accepted_seq": 17,
+                  "fee_paid": true,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "principal": 240,
+                  "filled_qty": 6,
+                  "fee_charged": 1,
+                  "avg_price": 40,
+                  "command_id": "44444444-4444-4444-a444-444444444444",
+                  "existing": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/orders/{id}": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Get a private order",
+        "description": "Requires a session. Only the owning account can read the order; missing and non-owned order IDs both return 404. Response is no-store.",
+        "operationId": "getOrder",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current committed order state.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "status": "PARTIAL",
+                  "outcome": "YES",
+                  "side": "BUY",
+                  "price": 42,
+                  "qty": 10,
+                  "remaining": 4,
+                  "filled": 6,
+                  "cancelled": 0,
+                  "accepted_seq": 17,
+                  "fee_paid": true,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "principal": 240,
+                  "filled_qty": 6,
+                  "fee_charged": 1,
+                  "avg_price": 40
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Request order cancellation",
+        "description": "Requires a session and ownership. Cancellation is durably queued; 202 means pending, not yet committed. Repeating the request returns the existing command.",
+        "operationId": "cancelOrder",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation is pending.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "command_id": "44444444-4444-4444-a444-444444444444",
+                  "status": "CANCEL_PENDING",
+                  "existing": false
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Committed cancellation or current final order for the existing cancel command.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "order_id": "33333333-3333-4333-a333-333333333333",
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "status": "CANCELLED",
+                  "outcome": "YES",
+                  "side": "BUY",
+                  "price": 42,
+                  "qty": 10,
+                  "remaining": 4,
+                  "filled": 6,
+                  "cancelled": 0,
+                  "accepted_seq": 17,
+                  "fee_paid": true,
+                  "created_at": "2026-10-27T19:00:00.000Z",
+                  "principal": 240,
+                  "filled_qty": 6,
+                  "fee_charged": 1,
+                  "avg_price": 40,
+                  "command_id": "44444444-4444-4444-a444-444444444444"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/me/orders": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "List the caller's orders",
+        "description": "Requires a session. Uses bounded keyset pagination. status defaults to open and can be all; market_id is optional. Cursor is bound to account, market filter, and status. Response is no-store.",
+        "operationId": "listMyOrders",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "market_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "all"
+              ],
+              "default": "open"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of private orders.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "order_id": "33333333-3333-4333-a333-333333333333",
+                      "market_id": "11111111-1111-4111-a111-111111111111",
+                      "status": "OPEN",
+                      "outcome": "YES",
+                      "side": "BUY",
+                      "price": 42,
+                      "qty": 10,
+                      "remaining": 10,
+                      "filled": 0,
+                      "cancelled": 0,
+                      "accepted_seq": 17,
+                      "fee_paid": false,
+                      "created_at": "2026-10-27T19:00:00.000Z"
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/markets/{id}/book": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Get the published public book",
+        "description": "Public, immutable in-memory view. A non-ready, expired, or unavailable local view returns 503; no actor message is sent.",
+        "operationId": "getBook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current published book view.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "market_id": "11111111-1111-4111-a111-111111111111",
+                  "owner_epoch": 3,
+                  "committed_seq": 17,
+                  "book_seq": 17,
+                  "last_price": 42,
+                  "pending_count": 0,
+                  "as_of": 1793127600000,
+                  "lease_until": 1793127610000,
+                  "health": "READY",
+                  "mode": "OPEN",
+                  "bids": [
+                    {
+                      "yes_price": 42,
+                      "qty": 12
+                    }
+                  ],
+                  "asks": [
+                    {
+                      "yes_price": 45,
+                      "qty": 8
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/markets/{id}/trades": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "List public committed trades",
+        "description": "Returns fills in descending execution sequence and fill index. Cursor is market-scoped; limit defaults to 50 and is capped at 100.",
+        "operationId": "listMarketTrades",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of committed fills.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "items": [
+                    {
+                      "execution_seq": 17,
+                      "fill_index": 0,
+                      "mode": "TRANSFER_YES",
+                      "qty": 2,
+                      "yes_price": 42,
+                      "created_at": "2026-10-27T19:00:00.000Z"
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/markets/{id}/history": {
+      "get": {
+        "tags": [
+          "Exchange"
+        ],
+        "summary": "Get public trade history",
+        "description": "Returns minute-price OHLCV bars downsampled to at most about 120 buckets for 1H, 6H, 1D, 1W, or ALL.",
+        "operationId": "getMarketHistory",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1H",
+                "6H",
+                "1D",
+                "1W",
+                "ALL"
+              ],
+              "default": "1D"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Downsampled OHLCV bars.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "period": "1D",
+                  "items": [
+                    {
+                      "bucket_at": "2026-10-27T19:00:00Z",
+                      "open": 41,
+                      "high": 45,
+                      "low": 39,
+                      "close": 42,
+                      "volume": 150
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
         }
       }
     }

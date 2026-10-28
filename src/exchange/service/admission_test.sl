@@ -1,4 +1,21 @@
 import "../domain" as core;
+import "json";
+
+gc struct AdmissionFake {
+    calls: int
+}
+
+fn admission_fake_write(f: AdmissionFake, _request: AdmissionRequest) -> result[AdmissionReceipt,str] {
+    f.calls+=1;
+    return ok(AdmissionReceipt { order_id:"00000000-0000-4000-a000-000000000012",
+        command_ref:"00000000-0000-4000-a000-000000000013",status:"ADMITTED",existing:false });
+}
+
+fn admission_fake_lookup(_f: AdmissionFake, _account: str, _key: str,
+                         _hash: str) -> result[opt[AdmissionReceipt],str] {
+    let empty:opt[AdmissionReceipt]=none;
+    return ok(empty);
+}
 
 fn quote_policy(v: int) -> PolicyView {
     return PolicyView { policy:core.Policy { market_id:"00000000-0000-4000-a000-000000000900",season_id:"00000000-0000-4000-a000-000000000901",
@@ -50,4 +67,70 @@ fn test_market_order_shape_staleness_grid_and_close_fail_before_holds() {
     request.request_type="limit"; request.price=some(3); request.qty=some(2); request.spend=none;
     let tick=normalize(request,p,quote_view(),1000,1000);
     if let _bad=tick { panic("off-grid limit accepted"); } else let f=err_of(tick) { assert(f.code=="OFF_TICK"); }
+}
+
+fn test_admission_validates_canonical_intent_and_order_before_store() {
+    let intent=Intent {
+        account_id:"00000000-0000-4000-a000-000000000011",
+        market_id:quote_policy(100).policy.market_id,request_type:"limit",outcome:"YES",side:"BUY",
+        price:some(10),qty:some(2),tif:none,spend:none
+    };
+    let request=AdmissionRequest {
+        market_id:intent.market_id,account_id:intent.account_id,
+        order_id:"00000000-0000-4000-a000-000000000012",
+        command_ref:"00000000-0000-4000-a000-000000000013",
+        idem_key:"00000000-0000-4000-a000-000000000014",
+        intent_hash:intent_hash(intent),original_intent:json.encode(intent),
+        source_key:"order:"+intent.account_id+":00000000-0000-4000-a000-000000000014",
+        bucket_start:0,
+        order:core.Order {
+            id:"00000000-0000-4000-a000-000000000012",account_id:intent.account_id,
+            owner_kind:"user",owner_group:"",outcome:"YES",side:"BUY",limit:10,qty:2,remaining:2,tif:"GTC",
+            accepted_seq:0,fee_paid:false,sedi_hold_id:"",share_hold_id:"",
+            sedi_original:21,sedi_consumed:0,sedi_released:0,shares_original:0,shares_consumed:0,shares_released:0,
+            filled:0,cancelled:0
+        }
+    };
+    let fake=AdmissionFake { calls:0 };
+    let store=OrderAdmissionStore[AdmissionFake] {
+        context:fake,lookup:admission_fake_lookup,admit:admission_fake_write
+    };
+    let submitted=admit_order(store,request);
+    guard let receipt=submitted else { panic("valid admission rejected"); }
+    assert(receipt.status=="ADMITTED" && fake.calls==1);
+    request.intent_hash="bad";
+    let rejected=admit_order(store,request);
+    if let _receipt=rejected { panic("invalid intent hash accepted"); }
+    else let e=err_of(rejected) { assert(e=="INVALID_ADMISSION"); }
+    assert(fake.calls==1);
+}
+
+fn test_prepare_admission_creates_only_server_owned_hold_facts() {
+    let intent=Intent {
+        account_id:"00000000-0000-4000-a000-000000000011",
+        market_id:quote_policy(100).policy.market_id,request_type:"limit",outcome:"NO",side:"SELL",
+        price:some(30),qty:some(4),tif:some("GTC"),spend:none
+    };
+    let normalized=Normalized {
+        limit:30,qty:4,tif:"GTC",estimated_principal:none,view_seq:none,protection_limit:none
+    };
+    let prepared=prepare_admission(intent,normalized,"user","",
+        "00000000-0000-4000-a000-000000000012","00000000-0000-4000-a000-000000000013",
+        "00000000-0000-4000-a000-000000000014",0);
+    guard let request=prepared else { panic("valid sell order not prepared"); }
+    assert(request.order.sedi_original==1 && request.order.shares_original==4);
+    assert(request.order.sedi_hold_id=="" && request.order.share_hold_id=="");
+    assert(request.source_key=="order:"+intent.account_id+":"+request.idem_key);
+}
+
+fn test_prepare_admission_rejects_market_buy_above_spend_budget() {
+    let intent=quote_intent();
+    let normalized=Normalized {
+        limit:13,qty:8,tif:"IOC",estimated_principal:some(104),view_seq:some(10),protection_limit:some(13)
+    };
+    let prepared=prepare_admission(intent,normalized,"user","",
+        "00000000-0000-4000-a000-000000000012","00000000-0000-4000-a000-000000000013",
+        "00000000-0000-4000-a000-000000000014",0);
+    if let _request=prepared { panic("market-buy reservation exceeded spend"); }
+    else let error=err_of(prepared) { assert(error=="INVALID_ADMISSION"); }
 }

@@ -9,6 +9,7 @@ import "platform/web" as web;
 import "accounts/server" as accounts;
 import "ledger/server" as ledger;
 import "markets/server" as markets;
+import "exchange/server" as exchange;
 // zokor:imports
 
 fn db_ready(s: app.App) -> result[int, str] {
@@ -64,6 +65,7 @@ r.ready_check("db", db_ready);
 r.ready_check("cache", cache_ready);
 accounts.mount(r);
 ledger.mount(r);
+exchange.mount(r);
 markets.mount(r);
 // zokor:mount
 if len(settings.ledger.metrics_token) > 0 {

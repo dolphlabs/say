@@ -11,6 +11,11 @@ fn fake_register(f: Fake, _node: str, _name: str, _live: int) -> result[bool, st
     return ok(f.register_result);
 }
 
+fn fake_candidates(f: Fake, _after_id: str, _limit: int) -> result[[str], str] {
+    if len(f.failure) > 0 { return err(f.failure); }
+    return ok([f.claim_result.market_id]);
+}
+
 fn fake_heartbeat(f: Fake, _node: str, _live: int, _markets: [str], _epochs: [int]) -> result[Heartbeat, str] {
     if len(f.failure) > 0 { return err(f.failure); }
     return ok(f.heartbeat_result);
@@ -26,12 +31,19 @@ fn fake_release(f: Fake, _market: str, _node: str, _epoch: int) -> result[bool, 
     return ok(f.release_result);
 }
 
+fn fake_mark_ready(f: Fake, _market: str, _node: str, _epoch: int) -> result[bool, str] {
+    if len(f.failure) > 0 { return err(f.failure); }
+    return ok(true);
+}
+
 fn fake_ownership(f: Fake) -> Ownership[Fake] {
     return new_ownership(OwnershipStore[Fake] {
         context: f,
+        candidates: fake_candidates,
         register_node: fake_register,
         heartbeat: fake_heartbeat,
         acquire: fake_acquire,
+        mark_ready: fake_mark_ready,
         release: fake_release
     });
 }

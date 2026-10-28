@@ -63,17 +63,17 @@ fn mirror_halt(p: Postgres, halted: bool) {
     redis.release(pool, conn);
 }
 
-fn count_of(p: Postgres, sql: str, w: Window) -> result[int, str] {
-    let r: result[[CountRow], str] = zokor.query_all(p.pool, sql, [pg.arg_text(w.from), pg.arg_text(w.to)],
-                                                    until_of(time.mono() + p.timeout * 30));
+fn count_of(conn: pg.Conn, timeout: int, sql: str, w: Window) -> result[int, str] {
+    let r: result[[CountRow], str] = zokor.conn_query_all(conn, sql, [pg.arg_text(w.from), pg.arg_text(w.to)],
+                                                    until_of(time.mono() + timeout * 30));
     guard let rows = r else let e = err_of(r) {
         return err(e);
     }
     return ok(rows[0].n);
 }
 
-fn check(p: Postgres, name: str, sql: str, w: Window, what: str) -> domain.Check {
-    let r = count_of(p, sql, w);
+fn check(conn: pg.Conn, timeout: int, name: str, sql: str, w: Window, what: str) -> domain.Check {
+    let r = count_of(conn, timeout, sql, w);
     guard let n = r else let e = err_of(r) {
         return domain.failed(name, -1, "check could not run: " + e);
     }
@@ -90,16 +90,16 @@ fn in_window() -> str {
 // The six checks the treasury screen shows, plus the three that need the
 // exchange. Each counts violations; zero passes. `w` limits the scan to
 // transactions that finished in [from, to).
-fn run_checks(p: Postgres, w: Window) -> [domain.Check] {
+fn run_checks(conn: pg.Conn, timeout: int, w: Window) -> [domain.Check] {
     let out: [domain.Check] = [];
-    push(out, check(p, "entries_balance",
+    push(out, check(conn, timeout, "entries_balance",
         "select count(*)::bigint as n from (select e.transaction_id from ledger_entries e " +
         "where e.transaction_id in (select t.id from ledger_transactions t where t.xid >= $1::xid8 and t.xid < $2::xid8) " +
         "group by e.transaction_id, e.asset_key having sum(e.delta) <> 0 " +
         "union all select t.id from ledger_transactions t where t.xid >= $1::xid8 and t.xid < $2::xid8 " +
         "and (select count(*) from ledger_entries e where e.transaction_id = t.id) < 2) x",
         w, "transactions do not sum to zero per asset"));
-    push(out, check(p, "cached_balances",
+    push(out, check(conn, timeout, "cached_balances",
         "select count(*)::bigint as n from wallets w join (select e.wallet_id, " +
         "coalesce(sum(e.delta) filter (where e.bucket = 'free'), 0) as f, " +
         "coalesce(sum(e.delta) filter (where e.bucket = 'held'), 0) as h from ledger_entries e " +
@@ -107,11 +107,11 @@ fn run_checks(p: Postgres, w: Window) -> [domain.Check] {
         "where t.xid >= $1::xid8 and t.xid < $2::xid8) group by e.wallet_id) s on s.wallet_id = w.id " +
         "where w.owner_kind <> 'system' and (w.free_units <> s.f or w.held_units <> s.h)",
         w, "wallets' cached balances differ from their entries"));
-    push(out, check(p, "no_negative_balances",
+    push(out, check(conn, timeout, "no_negative_balances",
         "select count(*)::bigint as n from wallets where owner_kind <> 'system' and (free_units < 0 or held_units < 0) " +
         "and $1::xid8 is not null and $2::xid8 is not null",
         w, "user or bot wallets are negative"));
-    push(out, check(p, "grants",
+    push(out, check(conn, timeout, "grants",
         "select count(*)::bigint as n from (select g.season_id from issuance_grants g " +
         "join issuance_policies pol on pol.id = g.policy_id " +
         "left join ledger_transactions t on t.business_key = g.business_key and t.kind = 'SEASON_GRANT' " +
@@ -123,12 +123,12 @@ fn run_checks(p: Postgres, w: Window) -> [domain.Check] {
         "or sum(g.amount) <> coalesce((select max(p2.season_cap) - sum(b.remaining) from issuance_budget b " +
         "join issuance_policies p2 on p2.id = b.policy_id where b.season_id = g.season_id), sum(g.amount))) x",
         w, "seasons whose grants disagree with their postings or their budget"));
-    push(out, check(p, "season_isolation",
+    push(out, check(conn, timeout, "season_isolation",
         "select count(*)::bigint as n from ledger_entries e join ledger_transactions t on t.id = e.transaction_id " +
         "join wallets w on w.id = e.wallet_id where t.xid >= $1::xid8 and t.xid < $2::xid8 " +
         "and (e.season_id <> t.season_id or w.season_id <> t.season_id)",
         w, "entries touch a wallet from another season"));
-    push(out, check(p, "holds",
+    push(out, check(conn, timeout, "holds",
         "select (select count(*) from holds h left join (select hold_id, sum(delta) as s from ledger_entries " +
         "where hold_id is not null group by hold_id) x on x.hold_id = h.id " +
         "where h.amount_held - h.amount_consumed - h.amount_released <> coalesce(x.s, 0) " +
@@ -140,10 +140,99 @@ fn run_checks(p: Postgres, w: Window) -> [domain.Check] {
         "and w.id in (select e.wallet_id from ledger_entries e join ledger_transactions t on t.id = e.transaction_id " +
         "where t.xid >= $1::xid8 and t.xid < $2::xid8)) as n",
         w, "holds disagree with their entries or their wallet's held balance"));
-    push(out, domain.not_yet("yes_no_supply", "prompt 05"));
-    push(out, domain.not_yet("collateral", "prompt 05"));
-    push(out, domain.not_yet("fee_once", "prompt 05"));
+    push(out, check(conn, timeout, "yes_no_supply",
+        "select count(*)::bigint as n from markets m " +
+        "where m.id in (select distinct market_id from ledger_transactions t " +
+        "where t.xid >= $1::xid8 and t.xid < $2::xid8 and market_id is not null) " +
+        "and (coalesce((select sum(qty) from positions p where p.market_id=m.id and p.outcome='YES'),0)<>m.issued_pairs " +
+        "or coalesce((select sum(qty) from positions p where p.market_id=m.id and p.outcome='NO'),0)<>m.issued_pairs " +
+        "or exists(select 1 from unnest(array['YES','NO']) side(outcome) where " +
+        "coalesce((select sum(w.free_units+w.held_units) from wallets w where w.season_id=m.season_id " +
+        "and w.owner_kind in ('user','bot') and w.asset_key=side.outcome||':'||m.id::text),0)<>m.issued_pairs " +
+        "or coalesce((select -sum(e.delta) from wallets w join ledger_entries e on e.wallet_id=w.id " +
+        "where w.season_id=m.season_id and w.owner_kind='system' and w.owner_id='system:shares:'||m.id::text " +
+        "and w.asset_key=side.outcome||':'||m.id::text),0)<>m.issued_pairs))",
+        w, "markets whose YES/NO positions differ from issued pairs"));
+    push(out, check(conn, timeout, "collateral",
+        "select count(*)::bigint as n from markets m " +
+        "where m.id in (select distinct market_id from ledger_transactions t " +
+        "where t.xid >= $1::xid8 and t.xid < $2::xid8 and market_id is not null) " +
+        "and coalesce((select sum(e.delta) from wallets w join ledger_entries e on e.wallet_id=w.id " +
+        "where w.season_id=m.season_id and w.owner_kind='system' " +
+        "and w.owner_id='system:collateral:'||m.id::text and w.asset_key='SEDI'),0)<>" +
+        "m.issued_pairs*m.redemption_units",
+        w, "markets whose collateral custody differs from issued-pair value"));
+    push(out, check(conn, timeout, "fee_once",
+        "select count(*)::bigint as n from (" +
+        "select o.id from orders o where (o.fee_posted is distinct from (o.filled_qty>0) or " +
+        "o.fee_posted is distinct from exists(" +
+        "select 1 from ledger_transactions t where t.kind='FEE' and t.business_key='fee:'||o.id::text " +
+        "and t.market_id=o.market_id and t.season_id=o.season_id " +
+        "and (select count(*) from ledger_entries e where e.transaction_id=t.id)=2 " +
+        "and (select count(*) from ledger_entries e join wallets w on w.id=e.wallet_id where e.transaction_id=t.id " +
+        "and e.asset_key='SEDI' and ((w.owner_kind='system' and w.owner_id='system:fees' and e.bucket='free' and e.delta=1) " +
+        "or (w.owner_kind=o.owner_kind and w.owner_id=o.account_id::text and e.bucket='held' and e.delta=-1 " +
+        "and e.hold_id=o.sedi_hold_id)))=2)) " +
+        "and o.market_id in (select distinct market_id from ledger_transactions x " +
+        "where x.xid >= $1::xid8 and x.xid < $2::xid8 and x.market_id is not null) " +
+        "union all " +
+        "select coalesce(o.market_id,p.market_id) from " +
+        "(select market_id,account_id,outcome,count(*)::bigint as fees from orders where fee_posted " +
+        "group by market_id,account_id,outcome) o full join " +
+        "(select market_id,account_id,outcome,sum(fees_paid)::bigint as fees from positions " +
+        "group by market_id,account_id,outcome) p using(market_id,account_id,outcome) " +
+        "where coalesce(o.fees,0)<>coalesce(p.fees,0) and coalesce(o.market_id,p.market_id) in " +
+        "(select distinct market_id from ledger_transactions x " +
+        "where x.xid >= $1::xid8 and x.xid < $2::xid8 and x.market_id is not null)) violations",
+        w, "market fees missing, duplicated, or inconsistent with order/position projections"));
+    push(out, check(conn, timeout, "order_holds",
+        "select count(*)::bigint as n from orders o left join holds h on h.id=o.sedi_hold_id " +
+        "left join holds q on q.id=o.share_hold_id where $1::xid8 is not null and $2::xid8 is not null and (" +
+        "h.id is null or h.ref_type<>'order' or h.ref_id<>o.id::text or h.amount_held<>o.sedi_original " +
+        "or h.amount_consumed<>o.sedi_consumed or h.amount_released<>o.sedi_released " +
+        "or h.amount_held-h.amount_consumed-h.amount_released<>case when o.status in ('ADMITTED','OPEN','PARTIAL') " +
+        "then (case when o.side='BUY' then o.limit_price*o.remaining_qty else 0 end)+case when o.fee_posted then 0 else 1 end else 0 end " +
+        "or (o.side='SELL' and (q.id is null or q.ref_type<>'order' or q.ref_id<>o.id::text " +
+        "or q.amount_held<>o.shares_original or q.amount_consumed<>o.shares_consumed or q.amount_released<>o.shares_released " +
+        "or q.amount_held-q.amount_consumed-q.amount_released<>case when o.status in ('ADMITTED','OPEN','PARTIAL') then o.remaining_qty else 0 end)))",
+        w,"orders whose liveness and hold budgets disagree"));
+    push(out, check(conn, timeout, "positions",
+        "select count(*)::bigint as n from (select p.qty,w.free_units+w.held_units as balance " +
+        "from positions p full join wallets w on w.owner_kind in ('user','bot') and w.owner_id=p.account_id::text " +
+        "and w.season_id=p.season_id and w.asset_key=p.outcome||':'||p.market_id::text " +
+        "where (p.account_id is not null or (w.owner_kind in ('user','bot') and w.asset_key<>'SEDI')) " +
+        "and $1::xid8 is not null and $2::xid8 is not null) x where coalesce(qty,0)<>coalesce(balance,0)",
+        w,"positions whose quantity differs from share-wallet inventory"));
+    push(out, check(conn, timeout, "queue_permits",
+        "select ((select count(*) from market_queue_budgets b where b.capacity-b.remaining<>(select count(*) " +
+        "from market_queue_claims q where q.market_id=b.market_id and q.bucket=b.bucket and q.released_at is null)) + " +
+        "(select count(*) from market_commands c join market_queue_claims q on q.command_ref=c.id " +
+        "where (c.state='PENDING') is distinct from (q.released_at is null)))::bigint as n " +
+        "where $1::xid8 is not null and $2::xid8 is not null",w,"queue claims inconsistent with pending work or remaining permits"));
+    push(out, check(conn, timeout, "command_chain",
+        "select count(*)::bigint as n from markets m where $1::xid8 is not null and $2::xid8 is not null and (" +
+        "m.committed_seq<>(select count(*) from market_commands c where c.market_id=m.id and c.state<>'PENDING') " +
+        "or (m.committed_seq>0 and not exists(select 1 from market_commands c where c.market_id=m.id " +
+        "and c.seq=m.committed_seq and c.state_hash=m.rolling_hash)) " +
+        "or exists(select 1 from market_commands c left join market_commands p on p.market_id=c.market_id and p.seq=c.seq-1 " +
+        "where c.market_id=m.id and c.seq>1 and (p.id is null or p.state_hash<>c.previous_hash)))",
+        w,"markets with a broken committed command sequence or hash chain"));
     return out;
+}
+
+gc struct ReconReadArg { timeout: int, scope: str }
+gc struct ReconRead { window: Window, checks: [domain.Check] }
+
+fn read_checks_tx(conn: pg.Conn,arg: ReconReadArg) -> result[ReconRead,str] {
+    let d=until_of(time.mono()+arg.timeout*30);
+    let isolation=pg.query(conn,"set transaction isolation level repeatable read, read only",[],d);
+    guard let _isolation=isolation else let e=err_of(isolation) { return err(e); }
+    let windows:result[[Window],str]=zokor.conn_query_all(conn,
+        "select (case when $1='full' then '0'::xid8 else (select xid from ledger_watermarks where name='recon') end)::text as from, "+
+        "pg_snapshot_xmin(pg_current_snapshot())::text as to",[pg.arg_text(arg.scope)],d);
+    guard let rows=windows else let e=err_of(windows) { return err(e); }
+    let checks=run_checks(conn,arg.timeout,rows[0]);
+    return ok(ReconRead { window:rows[0],checks:checks });
 }
 
 fn checks_json(checks: [domain.Check]) -> str {
@@ -238,14 +327,11 @@ fn st_recon_run(p: Postgres, full: bool) -> result[opt[service.ReconRun], str] {
         }
         id = inserted[0].id;
     }
-    let wr: result[[Window], str] = zokor.query_all(p.pool,
-        "select (case when $1 = 'full' then '0'::xid8 else (select xid from ledger_watermarks where name = 'recon') end)::text as from, " +
-        "pg_snapshot_xmin(pg_current_snapshot())::text as to", [pg.arg_text(scope)], deadline(p));
-    guard let windows = wr else let e = err_of(wr) {
-        return err(e);
-    }
-    let w = windows[0];
-    let checks = run_checks(p, w);
+    let read=zokor.transaction(p.pool,ReconReadArg { timeout:p.timeout,scope:scope },
+        read_checks_tx,until_of(time.mono()+p.timeout*30));
+    guard let scanned=read else let e=err_of(read) { return err(e); }
+    let w=scanned.window;
+    let checks=scanned.checks;
     let rr = zokor.transaction(p.pool, RecordArg { id: id, scope: scope, window: w, checks: checks, timeout: p.timeout },
                                record_tx, until_of(time.mono() + p.timeout));
     guard let good = rr else let e = err_of(rr) {

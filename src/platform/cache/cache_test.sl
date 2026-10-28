@@ -26,4 +26,26 @@ fn test_in_memory_cache_crud() {
     if let _v = m {
         panic("value should have been deleted");
     }
+
+}
+
+fn test_ordered_stream_deduplicates_and_rejects_late_market_events() {
+    let c=in_memory();
+    let market="00000000-0000-4000-a000-000000000001";
+    let first=xadd_ordered(c,"stream:market:"+market,market,100,10,2,
+        ["id","first","type","trade"]);
+    guard let _first=first else { panic("first ordered event failed"); }
+    let duplicate=xadd_ordered(c,"stream:market:"+market,market,100,10,2,
+        ["id","duplicate","type","trade"]);
+    guard let _duplicate=duplicate else { panic("duplicate ordered event failed"); }
+    let late=xadd_ordered(c,"stream:market:"+market,market,100,9,9,
+        ["id","late","type","trade"]);
+    guard let _late=late else { panic("late ordered event failed"); }
+    let stored=get(c,"stream:market:"+market+":"+market+":10:2");
+    guard let value=stored else { panic("ordered event read failed"); }
+    guard let event=value else { panic("original ordered event was lost"); }
+    assert(event=="id\nfirst\ntype\ntrade");
+    let rejected=get(c,"stream:market:"+market+":"+market+":9:9");
+    guard let missing=rejected else { panic("late event read failed"); }
+    if let _event=missing { panic("late event advanced the stream"); }
 }

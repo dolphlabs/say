@@ -1,0 +1,27 @@
+{
+  "commands": 1000,
+  "markets": 10,
+  "execution_seconds": 31.816,
+  "commands_per_second": 31.431,
+  "total_seconds": 36.489,
+  "modes": {
+    "MERGE": 240,
+    "TRANSFER_YES": 90,
+    "MINT": 90,
+    "TRANSFER_NO": 80
+  },
+  "reconciliation": "passed",
+  "recovered_sequences": [
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100,
+    100
+  ],
+  "distribution": "deterministic 12-command cycles across all four execution modes"
+}

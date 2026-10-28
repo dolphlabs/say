@@ -39,6 +39,9 @@ gc struct OwnerRow {
     active: bool
 }
 
+gc struct CandidateRow { id: str }
+gc struct ReadyRow { id: str }
+
 gc struct ClaimArg {
     postgres: Postgres,
     market_id: str,
@@ -51,6 +54,37 @@ gc struct ReleaseArg {
     market_id: str,
     node_id: str,
     epoch: int
+}
+
+fn st_candidates(postgres: Postgres, after_id: str, limit: int) -> result[[str], str] {
+    let rows: result[[CandidateRow], str] = zokor.query_all(postgres.pool,
+        "select m.id::text as id from markets m where ($1='' or m.id>$1::uuid) " +
+        "and m.status in ('OPEN','SUSPENDED','CLOSED','RESOLUTION_PENDING','DISPUTED','RESOLVED','VOIDED','SETTLING','SETTLED') " +
+        "and m.runtime_status<>'DEGRADED' and (" +
+        "m.runtime_status<>'READY' or not exists(select 1 from market_owners o join runtime_nodes n on n.id=o.node_id " +
+        "where o.market_id=m.id and o.epoch=m.owner_epoch and o.lease_until>clock_timestamp() " +
+        "and n.live_until>clock_timestamp() and not n.draining) or exists " +
+        "(select 1 from market_commands c where c.market_id=m.id and c.state='PENDING') or " +
+        "(m.status<>'OPEN' and exists(select 1 from orders o where o.market_id=m.id and o.remaining_qty>0 " +
+        "and o.status in ('OPEN','PARTIAL','ADMITTED')))) order by m.id limit $2",
+        [pg.arg_text(after_id),pg.arg_int(limit)],deadline(postgres));
+    guard let candidates=rows else let e=err_of(rows) { return err(e); }
+    let ids:[str]=[];
+    for candidate in candidates { push(ids,candidate.id); }
+    return ok(ids);
+}
+
+fn st_mark_ready(postgres: Postgres, market_id: str, node_id: str, epoch: int) -> result[bool, str] {
+    let rows: result[[ReadyRow], str] = zokor.query_all(postgres.pool,
+        "update markets m set runtime_status='READY',runtime_reason=null,runtime_verified_epoch=$3," +
+        "runtime_changed_at=clock_timestamp() from market_owners o,runtime_nodes n " +
+        "where m.id=$1::uuid and o.market_id=m.id and o.node_id=$2::uuid and o.epoch=$3 " +
+        "and o.lease_until>clock_timestamp() and n.id=o.node_id and n.live_until>clock_timestamp() " +
+        "and m.owner_epoch=$3 and not exists(select 1 from market_commands c " +
+        "where c.market_id=m.id and c.state='PENDING') returning m.id::text as id",
+        [pg.arg_text(market_id),pg.arg_text(node_id),pg.arg_int(epoch)],deadline(postgres));
+    guard let updated=rows else let e=err_of(rows) { return err(e); }
+    return ok(len(updated)==1);
 }
 
 fn st_register_node(postgres: Postgres, node_id: str, name: str, live_seconds: int) -> result[bool, str] {
@@ -128,7 +162,7 @@ fn st_acquire(postgres: Postgres, market_id: str, node_id: str, lease_seconds: i
 
 fn acquire_tx(conn: pg.Conn, arg: ClaimArg) -> result[service.Claim, str] {
     let market_result: result[[MarketRow], str] = zokor.conn_query_all(conn,
-        "select owner_epoch from markets where id=$1::uuid for update",
+        "select owner_epoch from markets where id=$1::uuid for no key update",
         [pg.arg_text(arg.market_id)], deadline(arg.postgres));
     guard let markets = market_result else let e = err_of(market_result) { return err(e); }
     if len(markets) == 0 { return err("MARKET_NOT_FOUND"); }
@@ -225,7 +259,7 @@ fn st_release(postgres: Postgres, market_id: str, node_id: str, epoch: int) -> r
 
 fn release_tx(conn: pg.Conn, arg: ReleaseArg) -> result[bool, str] {
     let market_result = pg.query(conn,
-        "select id from markets where id=$1::uuid for update",
+        "select id from markets where id=$1::uuid for no key update",
         [pg.arg_text(arg.market_id)], deadline(arg.postgres));
     guard let _market = market_result else let e = err_of(market_result) { return err(e); }
     let released_result: result[[NodeRow], str] = zokor.conn_query_all(conn,
@@ -238,7 +272,7 @@ fn release_tx(conn: pg.Conn, arg: ReleaseArg) -> result[bool, str] {
     if len(released) == 0 { return ok(false); }
     let marked = pg.query(conn,
         "update markets set runtime_status='RECOVERING',runtime_reason='OWNER_RELEASED'," +
-        "runtime_changed_at=clock_timestamp() where id=$1::uuid",
+        "runtime_changed_at=clock_timestamp() where id=$1::uuid and runtime_status<>'DEGRADED'",
         [pg.arg_text(arg.market_id)], deadline(arg.postgres));
     guard let _rows = marked else let e = err_of(marked) { return err(e); }
     return ok(true);
