@@ -15,3 +15,4 @@ loadtest/last-run.txt
 .toolchain/
 packages/say-stream/dist/
 packages/say-stream/node_modules/
+.zokor/

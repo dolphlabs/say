@@ -30,10 +30,19 @@ fn fake_load(f: FakeQueue, _market_id: str, _after: int, _limit: int) -> result[
     return ok(f.batch);
 }
 
+fn fake_cancel_all(f: FakeQueue, _market_id: str, _account_id: str,
+                    command_ref: str) -> result[EnqueueResult, str] {
+    f.calls += 1;
+    let response = f.enqueue_result;
+    response.command_ref = command_ref;
+    return ok(response);
+}
+
 fn fake_queue(f: FakeQueue) -> Queue[FakeQueue] {
     return new_queue(CommandQueue[FakeQueue] {
         context: f, enqueue_control: fake_enqueue, enqueue_cancel: fake_cancel,
-        enqueue_cancel_owned:fake_cancel_owned,load_pending: fake_load,sync_lifecycle:fake_sync_lifecycle
+        enqueue_cancel_owned: fake_cancel_owned, enqueue_cancel_all: fake_cancel_all,
+        load_pending: fake_load, sync_lifecycle: fake_sync_lifecycle
     });
 }
 

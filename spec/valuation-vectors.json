@@ -1,0 +1,212 @@
+{
+  "version": "1.0",
+  "description": "Shared valuation test vectors for say portfolio calculations across Slang and TypeScript",
+  "vectors": [
+    {
+      "name": "supplied_summary",
+      "type": "summary",
+      "description": "Total this season card from design: 427 available + 109 held + 978 position value = 1514; grant 1000 => pnl 514",
+      "input": {
+        "available": 427,
+        "held": 109,
+        "positions_value": 978,
+        "starting_grant": 1000
+      },
+      "expected": {
+        "total": 1514,
+        "season_pnl": 514
+      }
+    },
+    {
+      "name": "last_yes",
+      "type": "position",
+      "description": "V100, last60, qty3, basis150 -> mark 60, mark_source last_trade, value 180, unrealised 30, pct 20",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "YES",
+        "qty": 3,
+        "cost_basis": 150,
+        "last_price": 60,
+        "best_bid": 58,
+        "best_ask": 62
+      },
+      "expected": {
+        "mark_num": 60,
+        "mark_den": 1,
+        "mark_source": "last_trade",
+        "value": 180,
+        "unrealized_pnl": 30,
+        "pnl_pct": 20
+      }
+    },
+    {
+      "name": "last_no",
+      "type": "position",
+      "description": "V100, last Yes 60, qty3, basis150 -> own mark 40, mark_source last_trade, value 120, unrealised -30, pct -20",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "NO",
+        "qty": 3,
+        "cost_basis": 150,
+        "last_price": 60,
+        "best_bid": 58,
+        "best_ask": 62
+      },
+      "expected": {
+        "mark_num": 40,
+        "mark_den": 1,
+        "mark_source": "last_trade",
+        "value": 120,
+        "unrealized_pnl": -30,
+        "pnl_pct": -20
+      }
+    },
+    {
+      "name": "odd_midpoint_yes",
+      "type": "position",
+      "description": "V100, Yes bid50/ask51, no trade -> Yes mark 50 (floor of 50.5)",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "YES",
+        "qty": 2,
+        "cost_basis": 100,
+        "last_price": null,
+        "best_bid": 50,
+        "best_ask": 51
+      },
+      "expected": {
+        "mark_num": 50,
+        "mark_den": 1,
+        "mark_source": "mid",
+        "value": 100,
+        "unrealized_pnl": 0,
+        "pnl_pct": 0
+      }
+    },
+    {
+      "name": "odd_midpoint_no",
+      "type": "position",
+      "description": "V100, Yes bid50/ask51, no trade -> own_bid=49, own_ask=50, mid=floor(49.5)=49",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "NO",
+        "qty": 2,
+        "cost_basis": 100,
+        "last_price": null,
+        "best_bid": 50,
+        "best_ask": 51
+      },
+      "expected": {
+        "mark_num": 49,
+        "mark_den": 1,
+        "mark_source": "mid",
+        "value": 98,
+        "unrealized_pnl": -2,
+        "pnl_pct": -2
+      }
+    },
+    {
+      "name": "one_sided_quotes",
+      "type": "position",
+      "description": "One-sided quote cannot form a midpoint; falls back to exact avg cost",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "YES",
+        "qty": 5,
+        "cost_basis": 200,
+        "last_price": null,
+        "best_bid": 40,
+        "best_ask": null
+      },
+      "expected": {
+        "mark_num": 40,
+        "mark_den": 1,
+        "mark_source": "avg_cost",
+        "value": 200,
+        "unrealized_pnl": 0,
+        "pnl_pct": 0
+      }
+    },
+    {
+      "name": "fractional_avg_cost",
+      "type": "position",
+      "description": "qty 3, basis 101, no trades or quotes -> mark 101/3, value 101, pnl 0",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "YES",
+        "qty": 3,
+        "cost_basis": 101,
+        "last_price": null,
+        "best_bid": null,
+        "best_ask": null
+      },
+      "expected": {
+        "mark_num": 101,
+        "mark_den": 3,
+        "mark_source": "avg_cost",
+        "value": 101,
+        "unrealized_pnl": 0,
+        "pnl_pct": 0
+      }
+    },
+    {
+      "name": "negative_percentage",
+      "type": "position",
+      "description": "value 2, basis 3 -> unrealised -1, pct -33 (truncated toward zero)",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "YES",
+        "qty": 1,
+        "cost_basis": 3,
+        "last_price": 2,
+        "best_bid": 1,
+        "best_ask": 3
+      },
+      "expected": {
+        "mark_num": 2,
+        "mark_den": 1,
+        "mark_source": "last_trade",
+        "value": 2,
+        "unrealized_pnl": -1,
+        "pnl_pct": -33
+      }
+    },
+    {
+      "name": "zero_basis",
+      "type": "position",
+      "description": "basis 0 -> pnl_pct is null (no divide by zero)",
+      "input": {
+        "redemption_units": 100,
+        "outcome": "YES",
+        "qty": 2,
+        "cost_basis": 0,
+        "last_price": 50,
+        "best_bid": null,
+        "best_ask": null
+      },
+      "expected": {
+        "mark_num": 50,
+        "mark_den": 1,
+        "mark_source": "last_trade",
+        "value": 100,
+        "unrealized_pnl": 100,
+        "pnl_pct": null
+      }
+    },
+    {
+      "name": "missing_starting_grant",
+      "type": "summary",
+      "description": "Starting grant is null -> season_pnl is null",
+      "input": {
+        "available": 500,
+        "held": 0,
+        "positions_value": 0,
+        "starting_grant": null
+      },
+      "expected": {
+        "total": 500,
+        "season_pnl": null
+      }
+    }
+  ]
+}

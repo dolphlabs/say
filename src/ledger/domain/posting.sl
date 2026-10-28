@@ -80,7 +80,7 @@ pub gc struct Posted {
 
 pub fn kinds() -> [str] {
     return ["SEASON_GRANT", "ORDER_HOLD", "ORDER_RELEASE", "FILL", "FEE", "MINT", "MERGE", "PAYOUT",
-            "BOT_FUNDING", "ADJUSTMENT"];
+            "BOT_FUNDING", "BOT_ALLOCATION", "BOT_SWEEP", "ADJUSTMENT", "VOID_REFUND", "FEE_REFUND", "VOID_COLLATERAL_RELEASE"];
 }
 
 fn known_kind(k: str) -> bool {

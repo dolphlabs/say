@@ -64,6 +64,7 @@ pub gc struct CommandQueue[C] {
     enqueue_control: fn(C, EnqueueCommand) -> result[EnqueueResult, str],
     enqueue_cancel: fn(C, str, str, str, str, str, str) -> result[EnqueueResult, str],
     enqueue_cancel_owned: fn(C, str, str, str) -> result[EnqueueResult, str],
+    enqueue_cancel_all: fn(C, str, str, str) -> result[EnqueueResult, str],
     load_pending: fn(C, str, int, int) -> result[CommandBatch, str],
     sync_lifecycle: fn(C, str) -> result[int, str]
 }

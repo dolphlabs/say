@@ -79,6 +79,14 @@ gc struct CancelOwnedArg {
     command_ref: str
 }
 
+gc struct CancelAllArg {
+    postgres: Postgres,
+    market_id: str,
+    account_id: str,
+    command_ref: str
+}
+
+
 gc struct CancelMarketRow { market_id: str }
 
 gc struct CancelOrderRow {
@@ -160,6 +168,44 @@ fn enqueue_cancel_owned_tx(conn: pg.Conn,arg: CancelOwnedArg) -> result[service.
         source_key:"cancel:"+arg.account_id+":"+arg.order_id,payload:json.encode(command)
     });
 }
+
+fn st_enqueue_cancel_all(postgres: Postgres, market_id: str, account_id: str,
+                         command_ref: str) -> result[service.EnqueueResult, str] {
+    let enqueued = zokor.transaction(postgres.pool,
+        CancelAllArg { postgres: postgres, market_id: market_id, account_id: account_id, command_ref: command_ref },
+        enqueue_cancel_all_tx, deadline(postgres));
+    guard let receipt = enqueued else let e = err_of(enqueued) { return err(runtime_failure(e)); }
+    return ok(receipt);
+}
+
+fn enqueue_cancel_all_tx(conn: pg.Conn, arg: CancelAllArg) -> result[service.EnqueueResult, str] {
+    let command = core.Command {
+        kind: "CancelAll", seq: 0, ref: arg.command_ref, order: core.empty_order(), order_id: "",
+        account_id: arg.account_id, system: false, reason: "USER_CANCEL"
+    };
+    let source_key = "cancel_all:" + arg.market_id + ":" + arg.account_id + ":" + arg.command_ref;
+    let reserved: result[[ReservationRow], str] = zokor.conn_query_all(conn,
+        "select command_ref::text as command_ref,bucket::integer as queue_bucket,existing " +
+        "from say_runtime_reserve($1::uuid,$2::uuid,'CancelAll',$3,0)",
+        [pg.arg_text(arg.market_id), pg.arg_text(arg.command_ref), pg.arg_text(source_key)], deadline(arg.postgres));
+    guard let reservations = reserved else let e = err_of(reserved) { return err(e); }
+    if len(reservations) != 1 { return err("RUNTIME_RESERVATION_EMPTY"); }
+    let reservation = reservations[0];
+    if reservation.existing {
+        return ok(service.EnqueueResult {
+            command_ref: reservation.command_ref, queue_bucket: reservation.queue_bucket, existing: true
+        });
+    }
+    let inserted = pg.query(conn,
+        "select say_runtime_enqueue($1::uuid,$2::uuid,'CancelAll',null,$3,$4::jsonb)",
+        [pg.arg_text(arg.market_id), pg.arg_text(arg.command_ref),
+         pg.arg_text(source_key), pg.arg_text(json.encode(command))], deadline(arg.postgres));
+    guard let _inserted = inserted else let e = err_of(inserted) { return err(e); }
+    return ok(service.EnqueueResult {
+        command_ref: reservation.command_ref, queue_bucket: reservation.queue_bucket, existing: false
+    });
+}
+
 
 fn enqueue_cancel_tx(conn: pg.Conn, arg: CancelWriteArg) -> result[service.EnqueueResult,str] {
     let order: result[[CancelOrderRow],str]=zokor.conn_query_all(conn,

@@ -77,3 +77,21 @@ pub fn one_text(d: Db, sql: str, args: [str], deadline: until) -> result[str, st
     }
     return ok(rows[0].t);
 }
+
+gc struct BotKeyRow {
+    bot_id: str
+}
+
+pub fn lookup_bot_key(d: Db, key_hash: str, deadline: until) -> result[opt[str], str] {
+    let r: result[[BotKeyRow], str] = zokor.query_all(d.pool,
+        "select bot_id::text from bot_api_keys where key_hash = $1 and revoked_at is null",
+        [pg.arg_text(key_hash)], deadline);
+    guard let rows = r else let e = err_of(r) {
+        return err(e);
+    }
+    if len(rows) > 0 {
+        return ok(some(rows[0].bot_id));
+    }
+    let none_id: opt[str] = none;
+    return ok(none_id);
+}

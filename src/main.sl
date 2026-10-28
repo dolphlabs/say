@@ -11,6 +11,10 @@ import "ledger/server" as ledger;
 import "markets/server" as markets;
 import "exchange/server" as exchange;
 import "stream/server" as stream;
+import "portfolio/server" as portfolio;
+import "notifications/server" as notifications;
+import "resolution/server" as resolution;
+import "treasury/server" as treasury;
 // zokor:imports
 
 fn db_ready(s: app.App) -> result[int, str] {
@@ -69,6 +73,10 @@ ledger.mount(r);
 exchange.mount(r);
 markets.mount(r);
 stream.mount(r);
+portfolio.mount(r);
+notifications.mount(r);
+resolution.mount(r);
+treasury.mount(r);
 // zokor:mount
 if len(settings.ledger.metrics_token) > 0 {
     r.get("/metrics", app.metrics_route);

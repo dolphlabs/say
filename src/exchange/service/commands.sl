@@ -55,6 +55,16 @@ pub fn enqueue_cancel_owned[C](queue: Queue[C], order_id: str, account_id: str,
     return write(queue.store.context,order_id,account_id,command_ref);
 }
 
+pub fn enqueue_cancel_all[C](queue: Queue[C], market_id: str, account_id: str,
+                             command_ref: str) -> result[EnqueueResult, str] {
+    if !valid_uuid(market_id) || !valid_uuid(account_id) || !valid_uuid(command_ref) {
+        return err("INVALID_CANCEL");
+    }
+    let write = queue.store.enqueue_cancel_all;
+    return write(queue.store.context, market_id, account_id, command_ref);
+}
+
+
 pub fn load_pending[C](queue: Queue[C], market_id: str, after_command_id: int, limit: int) -> result[CommandBatch, str] {
     if !valid_uuid(market_id) || after_command_id < 0 || limit < 1 || limit > 64 {
         return err("INVALID_COMMAND_WINDOW");

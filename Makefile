@@ -92,3 +92,13 @@ test-runtime-differential: runtime-tools test-stack
 
 bench-runtime: runtime-tools test-stack
 	$(RUNTIME_PYTHON) tools/runtime/load.py
+
+.PHONY: bot-tools test-sim
+
+bot-tools:
+	mkdir -p bin
+	$(SLANGC) apps/say-bots/main.sl -o bin/say-bots
+	$(SLANGC) tools/sim/main.sl -o bin/sim
+
+test-sim: bot-tools
+	./bin/sim

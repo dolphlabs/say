@@ -127,8 +127,9 @@ pub fn kind_allowed(kind: str, status: str) -> bool {
     if kind == "ORDER_RELEASE" {
         return status == active() || status == closing();
     }
-    if kind == "PAYOUT" {
-        return status == closing() || status == closed();
+    if kind == "PAYOUT" || kind == "VOID_REFUND" || kind == "FEE_REFUND" || kind == "VOID_COLLATERAL_RELEASE" ||
+       kind == "BOT_FUNDING" || kind == "BOT_ALLOCATION" || kind == "BOT_SWEEP" {
+        return status != finalized();
     }
     if kind == "ADJUSTMENT" {
         return status != finalized();
@@ -139,5 +140,7 @@ pub fn kind_allowed(kind: str, status: str) -> bool {
 // Kinds that need ACTIVE also share-lock the season row, so the
 // ACTIVE -> CLOSING update waits for them and later ones see CLOSING.
 pub fn needs_active(kind: str) -> bool {
-    return kind != "ORDER_RELEASE" && kind != "PAYOUT" && kind != "ADJUSTMENT";
+    return kind != "ORDER_RELEASE" && kind != "PAYOUT" && kind != "VOID_REFUND" &&
+           kind != "FEE_REFUND" && kind != "VOID_COLLATERAL_RELEASE" && kind != "ADJUSTMENT" &&
+           kind != "BOT_FUNDING" && kind != "BOT_ALLOCATION" && kind != "BOT_SWEEP";
 }
