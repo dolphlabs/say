@@ -19,7 +19,6 @@ import "../../markets/service" as markets;
 import "../../markets/store" as markets_store;
 import "../../exchange/service" as exchange;
 import "../../exchange/store" as exchange_store;
-import "../../stream/domain" as stream_domain;
 import "../../stream/service" as stream_svc;
 import "../../stream/store" as stream_store;
 // zokor:imports

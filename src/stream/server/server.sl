@@ -8,7 +8,6 @@ import "../domain" as domain;
 import "../service" as service;
 import "../../platform/app" as app;
 import "../../platform/auth" as auth;
-import "../../platform/config" as config;
 
 gc struct RawClientOp {
     op: str,
@@ -37,17 +36,17 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     return 0;
 }
 
-fn is_origin_allowed(s: config.Settings, origin: str) -> bool {
+pub fn is_origin_allowed(app_url: str, profile: str, origin: str) -> bool {
     if len(origin) == 0 {
         return true;
     }
     if strings.contains(origin, "localhost") || strings.contains(origin, "127.0.0.1") {
         return true;
     }
-    if len(s.auth.app_url) > 0 && strings.has_prefix(origin, s.auth.app_url) {
+    if len(app_url) > 0 && strings.has_prefix(origin, app_url) {
         return true;
     }
-    if s.profile == "dev" || s.profile == "test" {
+    if profile == "dev" || profile == "test" {
         return true;
     }
     return false;
@@ -56,7 +55,7 @@ fn is_origin_allowed(s: config.Settings, origin: str) -> bool {
 fn stream_open(c: zokor.Ctx[app.App]) -> http.Response {
     let origin = c.header("Origin");
     if len(origin) > 0 {
-        if !is_origin_allowed(c.state.settings, origin) {
+        if !is_origin_allowed(c.state.settings.auth.app_url, c.state.settings.profile, origin) {
             return zokor.respond(c.errors, "FORBIDDEN", c.request_id);
         }
     }
