@@ -1,6 +1,9 @@
 // zokor:public
+import "crypto";
+import "email";
 import "encoding";
 import "http";
+import "time";
 import "timez";
 import "zokor";
 import "../../platform/app" as app;
@@ -31,9 +34,21 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     let me = r.group("/v1/me");
     me.before(auth.require_session);
     me.get("", show_me);
+    me.post("/username", change_username);
+    me.post("/email", request_email_change);
+    me.post("/email/verify", verify_email_change);
     me.post("/password", change_password);
     me.delete("/google", unlink_google);
+    me.post("/2fa/enroll", enroll_2fa);
+    me.post("/2fa/verify", verify_2fa);
+    me.post("/2fa/disable", disable_2fa);
     me.delete("", delete_me);
+
+    let adm = r.group("/v1/admin");
+    adm.before(auth.require_session);
+    adm.post("/roles", grant_role_handler);
+    adm.delete("/roles", revoke_role_handler);
+
     return 0;
 }
 
@@ -308,9 +323,253 @@ fn unlink_google(c: zokor.Ctx[app.App]) -> http.Response {
 }
 
 fn delete_me(c: zokor.Ctx[app.App]) -> http.Response {
-    let r = accounts.delete_account(c.state.accounts, session(c), meta(c));
-    guard let _ok = r else let f = err_of(r) {
-        return failure(c, f);
+    let account_id = c.local("account_id");
+
+    // 1. Cancel all open orders concurrently across markets
+    let m_res = accounts.open_markets_for_account(c.state.accounts, account_id);
+    if let markets_list = m_res {
+        for m_id in markets_list {
+            let _ = app.cancel_all_orders_for_market(c.state, m_id, account_id, app.new_uuid());
+        }
     }
+
+    // 2. Anonymise account everywhere
+    let anon_res = accounts.anonymise_account(c.state.accounts, account_id);
+    guard let _ok = anon_res else let e = err_of(anon_res) {
+        c.state.settings.server.logger.error("accounts", "anonymise failed: " + e);
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
     return auth.without_session(zokor.accepted("{}"));
+}
+
+fn change_username(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[ChangeUsernameDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let account_id = c.local("account_id");
+
+    // Check target availability and format
+    let chk = accounts.check_username(c.state.accounts, body.username, c.client_ip);
+    guard let u = chk else let f = err_of(chk) { return failure(c, f); }
+    if !u.available {
+        return zokor.respond(c.errors, "USERNAME_TAKEN", c.request_id);
+    }
+
+    // Get old username
+    let acc_r = accounts.account(c.state.accounts, session(c));
+    guard let opt_acc = acc_r else let _f = err_of(acc_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+    let old_username = opt_acc.username;
+
+    let now_ms = (time.mono() / 1000000) as int;
+    let chg_r = accounts.change_username(c.state.accounts, account_id, old_username, body.username, now_ms);
+    guard let _ok = chg_r else let e = err_of(chg_r) {
+        if e == "USERNAME_CHANGE_WINDOW_CLOSED" {
+            return zokor.respond(c.errors, "USERNAME_CHANGE_WINDOW_CLOSED", c.request_id);
+        }
+        if e == "USERNAME_ALREADY_CHANGED_THIS_SEASON" {
+            return zokor.respond(c.errors, "USERNAME_ALREADY_CHANGED_THIS_SEASON", c.request_id);
+        }
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    return zokor.ok_json("{\"username\":\"" + body.username + "\"}");
+}
+
+fn request_email_change(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[RequestEmailChangeDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let account_id = c.local("account_id");
+
+    let req_r = accounts.request_email_change(c.state.accounts, account_id, body.new_email);
+    guard let req = req_r else let e = err_of(req_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    let _ = email.send(c.state.mailer.context.email, email.EmailMessage {
+        from: c.state.mailer.context.from,
+        to: [body.new_email],
+        subject: "Confirm your new say email",
+        html: "<p>Your email change code is: <strong>" + req.code + "</strong></p>",
+        text: "Your email change code is: " + req.code,
+        tags: ["change_email"]
+    });
+
+    let resp_body = zokor.jobj()
+        .set_str("change_token", req.token)
+        .set_str("resend_available_at", "60s")
+        .render();
+    return zokor.no_store(zokor.json_response(202, resp_body));
+}
+
+fn verify_email_change(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[VerifyEmailChangeDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let account_id = c.local("account_id");
+
+    let ver_r = accounts.verify_email_change(c.state.accounts, account_id, body.change_token, body.code);
+    guard let res = ver_r else let e = err_of(ver_r) {
+        if e == "INVALID_CODE" {
+            return zokor.respond(c.errors, "INVALID_CODE", c.request_id);
+        }
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    if res.old_email != "" {
+        let _ = email.send(c.state.mailer.context.email, email.EmailMessage {
+            from: c.state.mailer.context.from,
+            to: [res.old_email],
+            subject: "Your say email address was changed",
+            html: "<p>Your say account email has been updated to " + res.new_email + ". If this wasn't you, contact support immediately.</p>",
+            text: "Your say account email has been updated to " + res.new_email,
+            tags: ["security_notice"]
+        });
+    }
+
+    return zokor.no_content();
+}
+
+fn enroll_2fa(c: zokor.Ctx[app.App]) -> http.Response {
+    let account_id = c.local("account_id");
+
+    let acc_r = accounts.account(c.state.accounts, session(c));
+    guard let opt_acc = acc_r else let _f = err_of(acc_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+    let username = opt_acc.username;
+
+    let enr_r = accounts.enroll_totp(c.state.accounts, account_id, username);
+    guard let enr = enr_r else let e = err_of(enr_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    let body = zokor.jobj()
+        .set_str("secret", enr.secret_b32)
+        .set_str("uri", enr.uri)
+        .render();
+    return zokor.no_store(zokor.ok_json(body));
+}
+
+fn verify_2fa(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[Verify2faDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let account_id = c.local("account_id");
+    let now_sec = (time.mono() / 1000000000) as int;
+    let sess_token = auth.session_token(c);
+    let sess_hash = encoding.hex_encode(crypto.sha256(to_bytes(sess_token)));
+
+    let ver_r = accounts.verify_totp(c.state.accounts, account_id, sess_hash, body.code, now_sec);
+    guard let _ok = ver_r else let e = err_of(ver_r) {
+        if e == "INVALID_CODE" {
+            return zokor.respond(c.errors, "INVALID_CODE", c.request_id);
+        }
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    return zokor.ok_json("{\"verified\":true}");
+}
+
+fn disable_2fa(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[Verify2faDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let account_id = c.local("account_id");
+    let now_sec = (time.mono() / 1000000000) as int;
+
+    let dis_r = accounts.disable_totp(c.state.accounts, account_id, body.code, now_sec);
+    guard let _ok = dis_r else let e = err_of(dis_r) {
+        if e == "INVALID_CODE" {
+            return zokor.respond(c.errors, "INVALID_CODE", c.request_id);
+        }
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    return zokor.no_content();
+}
+
+fn grant_role_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    let caller_id = c.local("account_id");
+    let dr: result[RoleAdminDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let is_super = app.has_role(c.state, caller_id, "super_admin");
+    let can_grant = false;
+    if let s = is_super { if s { can_grant = true; } }
+    if body.role == "creator" {
+        let is_curator = app.has_role(c.state, caller_id, "curator");
+        if let cu = is_curator { if cu { can_grant = true; } }
+    }
+
+    if !can_grant {
+        return zokor.respond(c.errors, "FORBIDDEN", c.request_id);
+    }
+
+    let target_r = accounts.find_account_id_by_username(c.state.accounts, body.username);
+    guard let opt_target = target_r else let e = err_of(target_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+    guard let target_id = opt_target else {
+        return zokor.respond(c.errors, "NOT_FOUND", c.request_id);
+    }
+
+    if body.role == "creator" {
+        let gr_r = accounts.grant_role(c.state.accounts, target_id, "creator");
+        guard let _ok = gr_r else let e = err_of(gr_r) {
+            return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+        }
+        return zokor.ok_json("{\"status\":\"granted\"}");
+    }
+
+    let now_ms = (time.mono() / 1000000) as int;
+    let payload = zokor.jobj().set_str("username", body.username).set_str("role", body.role).set_str("reason", body.reason).render();
+    let p_hash = encoding.hex_encode(crypto.sha256(to_bytes(payload)));
+
+    let req_res = app.request_approval(c.state, "role_grant", "role", target_id, p_hash, caller_id, 1, 1, body.reason, now_ms);
+    guard let app_id = req_res else let e = err_of(req_res) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    let resp_b = zokor.jobj()
+        .set_str("status", "pending_approval")
+        .set_str("approval_id", app_id)
+        .render();
+    return zokor.no_store(zokor.json_response(202, resp_b));
+}
+
+fn revoke_role_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    let caller_id = c.local("account_id");
+    let dr: result[RoleAdminDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+
+    let is_super = app.has_role(c.state, caller_id, "super_admin");
+    let can_revoke = false;
+    if let s = is_super { if s { can_revoke = true; } }
+    if body.role == "creator" {
+        let is_curator = app.has_role(c.state, caller_id, "curator");
+        if let cu = is_curator { if cu { can_revoke = true; } }
+    }
+
+    if !can_revoke {
+        return zokor.respond(c.errors, "FORBIDDEN", c.request_id);
+    }
+
+    let target_r = accounts.find_account_id_by_username(c.state.accounts, body.username);
+    guard let opt_target = target_r else let e = err_of(target_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+    guard let target_id = opt_target else {
+        return zokor.no_content();
+    }
+
+    let rev_r = accounts.revoke_role(c.state.accounts, target_id, body.role);
+    guard let _ok = rev_r else let e = err_of(rev_r) {
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
+
+    return zokor.no_content();
 }

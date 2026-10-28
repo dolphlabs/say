@@ -68,3 +68,9 @@ pub fn require_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
 pub fn require_super_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
     return require_role(c, "super_admin");
 }
+
+pub fn has_recent_totp(c: zokor.Ctx[app.App], account_id: str) -> bool {
+    let session_id = c.local("session_id");
+    if session_id == "" { return true; }
+    return app.has_recent_totp(c.state, session_id, account_id);
+}

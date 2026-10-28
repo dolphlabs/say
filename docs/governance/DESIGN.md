@@ -1,6 +1,6 @@
 # Standings, profiles, settings and governance
 
-Status: **proposed; awaiting review**. Date: 2026-10-26.
+Status: **proposed; awaiting review**. Date: 2026-10-28.
 
 Prompt 10's design deliverable. Stop here for review before migrations,
 endpoints, new tests, clock refactoring or launch rehearsal. No staging
@@ -16,11 +16,14 @@ deployment, financial operation or rehearsal result is implied.
 | Operator | Revoke access promptly, recover bounded jobs and rehearse the whole exchange with reproducible clocks/faults |
 | Portfolio/notifications | Share valuation/rank generations and announce a final rank only after a durable final standings freeze |
 
-Inspected facts, distinct from earlier proposed designs:
+Inspected facts across the implemented codebase (prompts 01–09 complete):
 
-- Auth/ledger are implemented. Registry, matching, runtime, stream,
-  portfolio, resolution and bots remain proposed documents. This module
-  cannot launch-rehearse nonexistent dependencies or claim their APIs work.
+- Auth (01), ledger/seasons (02), markets (03), exchange matching & runtime (04/05),
+  live stream (06), portfolio & notifications (07), resolution & settlement (08),
+  and treasury & bots (09) are implemented and verified (`zokor check` passes).
+  This prompt builds the final layer: leaderboard standings, public profiles,
+  account settings, approvals inbox, audit log, staff roles & 2FA, and the
+  end-to-end launch rehearsal.
 - Accounts use kind USER/BOT, status DELETED and citext identity fields.
   Sessions, credentials, Google links, OTP limits, logout/password/unlink
   routes and a username courtesy hold already exist. Reuse those owners.

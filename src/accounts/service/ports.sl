@@ -213,3 +213,41 @@ pub gc struct Mailer[M] {
     context: M,
     send: fn(M, Mail) -> result[bool, str]
 }
+
+pub gc struct TotpRow {
+    secret_encrypted: str,
+    last_verified_step: int
+}
+
+pub gc struct SeasonWindow {
+    season_id: str,
+    starts_at_ms: int
+}
+
+pub gc struct EmailChangeRow {
+    old_email: str,
+    new_email: str
+}
+
+pub gc struct SettingsStore[C] {
+    context: C,
+    has_recent_totp: fn(C, str, str) -> bool,
+    save_pending_totp: fn(C, str, str) -> result[bool, str],
+    load_pending_totp: fn(C, str) -> result[opt[str], str],
+    activate_totp: fn(C, str, str, int, str) -> result[bool, str],
+    load_account_totp: fn(C, str) -> result[opt[TotpRow], str],
+    record_totp_step_up: fn(C, str, int, str) -> result[bool, str],
+    delete_totp: fn(C, str) -> result[bool, str],
+    get_season_window: fn(C) -> result[opt[SeasonWindow], str],
+    has_username_history_in_season: fn(C, str, str) -> result[bool, str],
+    change_username: fn(C, str, str, str, str) -> result[bool, str],
+    request_email_change: fn(C, str, str, bytes, bytes) -> result[bool, str],
+    verify_email_change: fn(C, bytes, str, bytes) -> result[opt[EmailChangeRow], str],
+    apply_email_change: fn(C, str, str) -> result[[bytes], str],
+    find_account_id_by_username: fn(C, str) -> result[opt[str], str],
+    grant_role_direct: fn(C, str, str) -> result[bool, str],
+    revoke_role_direct: fn(C, str, str) -> result[bool, str],
+    open_markets_for_account: fn(C, str) -> result[[str], str],
+    anonymise_account: fn(C, str, str, str) -> result[[bytes], str]
+}
+

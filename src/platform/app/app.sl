@@ -29,6 +29,14 @@ import "../../resolution/service" as resolution_svc;
 import "../../resolution/store" as resolution_store;
 import "../../treasury/service" as treasury;
 import "../../treasury/store" as treasury_store;
+import "../../standings/service" as standings_svc;
+import "../../standings/store" as standings_store;
+import "../../profiles/service" as profile_svc;
+import "../../profiles/store" as profile_store;
+import "../../audit/service" as audit_svc;
+import "../../audit/store" as audit_store;
+import "../../approvals/service" as approvals_svc;
+import "../../approvals/store" as approvals_store;
 // zokor:imports
 
 pub gc struct Postman {
@@ -39,6 +47,10 @@ pub gc struct Postman {
 pub gc struct App {
     markets: markets.Markets[markets_store.Store],
     treasury: treasury.TreasuryService[treasury_store.PostgresTreasuryStore],
+    standings: standings_svc.StandingsService[standings_store.PostgresStandingsStore],
+    profiles: profile_svc.ProfileService[profile_store.PostgresProfileStore],
+    audit: audit_svc.AuditService[audit_store.PostgresAuditStore],
+    approvals: approvals_svc.ApprovalsService[pg.Pool],
     // zokor:fields
     accounts: accounts.Auth[accounts_store.Store],
     ledger: ledger.Ledger[ledger_store.Postgres],
@@ -180,12 +192,24 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     let res_service = resolution_svc.new_resolution_service(res_store);
     let tr_store = treasury_store.make_postgres_treasury_store(d.pool);
     let tr_service = treasury.new_treasury_service(treasury_store.treasury_store(tr_store));
+    let st_store = standings_store.new_store(d.pool);
+    let st_service = standings_svc.new_service(st_store);
+    let pr_store = profile_store.new_store(d.pool);
+    let pr_service = profile_svc.new_service(pr_store);
+    let au_store = audit_store.new_store(d.pool);
+    let au_service = audit_svc.new_service(au_store);
+    let ap_store = approvals_store.approval_store(d.pool);
+    let ap_service = approvals_svc.new_service(ap_store);
     let snapshot_queue:chan[exchange.SnapshotWrite]=make_chan(64);
     return ok(App {
         markets: registry,
         treasury: tr_service,
+        standings: st_service,
+        profiles: pr_service,
+        audit: au_service,
+        approvals: ap_service,
         // zokor:build
-        accounts: accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid),
+        accounts: accounts.with_settings(accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid), accounts_store.settings_store(st)),
         ledger: ledger.new_ledger(ledger_store.ledger_store(lst), lcfg, clock),
         ownership: ownership,
         heartbeat_ownership: heartbeat_ownership,
@@ -390,6 +414,18 @@ pub fn has_role(a: App, account_id: str, role: str) -> result[bool, str] {
     return ok(false);
 }
 
+pub fn has_recent_totp(a: App, session_id: str, account_id: str) -> bool {
+    return accounts.has_recent_totp(a.accounts, session_id, account_id);
+}
+
+pub fn cancel_all_orders_for_market(a: App, market_id: str, account_id: str, command_ref: str) -> result[exchange.EnqueueResult, str] {
+    return exchange.enqueue_cancel_all(a.command_queue, market_id, account_id, command_ref);
+}
+
+pub fn request_approval(a: App, kind: str, subject_type: str, subject_id: str, payload_hash: str, requester: str, round: int, slot: int, reason: str, now_ms: int) -> result[str, str] {
+    return approvals_svc.request(a.approvals, kind, subject_type, subject_id, payload_hash, requester, round, slot, reason, now_ms);
+}
+
 // The ledger's background reports, into the log and the metrics.
 fn drain_ledger_signals(a: App) -> int {
     let log = a.settings.server.logger;
@@ -491,6 +527,7 @@ pub fn start_workers(a: App) {
     start_stream_workers(a);
     spawn run_closing_soon_scheduler(a);
     spawn run_resolution_watchers(a);
+    spawn standings_svc.run_standings_worker(a.standings);
 }
 
 fn run_resolution_watchers(a: App) -> int {

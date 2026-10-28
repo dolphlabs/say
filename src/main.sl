@@ -15,6 +15,10 @@ import "portfolio/server" as portfolio;
 import "notifications/server" as notifications;
 import "resolution/server" as resolution;
 import "treasury/server" as treasury;
+import "standings/server" as standings;
+import "profiles/server" as profiles;
+import "approvals/server" as approvals;
+import "audit/server" as audit;
 // zokor:imports
 
 fn db_ready(s: app.App) -> result[int, str] {
@@ -77,6 +81,10 @@ portfolio.mount(r);
 notifications.mount(r);
 resolution.mount(r);
 treasury.mount(r);
+standings.mount(r);
+profiles.mount(r);
+approvals.mount(r);
+audit.mount(r);
 // zokor:mount
 if len(settings.ledger.metrics_token) > 0 {
     r.get("/metrics", app.metrics_route);
