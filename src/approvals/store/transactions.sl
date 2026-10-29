@@ -1,4 +1,5 @@
 import "pg";
+import "time";
 import "zokor";
 import "../service" as service;
 
@@ -69,8 +70,27 @@ pub fn applied(c: pg.Conn, approval_id: str, subject_id: str, now: int, d: until
     return ok(true);
 }
 
+gc struct InboxRow {
+    id: str,
+    kind: str,
+    subject_type: str,
+    subject_id: str,
+    payload_hash: str,
+    requested_by: str,
+    requester_username: str,
+    requester_role: str,
+    requested_at: int,
+    status: str,
+    reason: str,
+    title: str
+}
+
+fn app_dl() -> until {
+    return until_of(time.mono() + 5000000000);
+}
+
 pub fn load_by_id(c: pg.Conn, approval_id: str, d: until) -> result[opt[service.Request], str] {
-    let r = zokor.conn_query_all(c,
+    let r: result[[service.Request], str] = zokor.conn_query_all(c,
         "select r.id::text as id, r.kind, r.subject_type, r.subject_id::text as subject_id, r.payload_hash, " +
         "r.requested_by::text as requested_by, r.approval_round, r.slot, s.status, s.version, " +
         "(extract(epoch from r.expires_at)*1000)::bigint as expires_at " +
@@ -86,8 +106,8 @@ pub fn load_by_id(c: pg.Conn, approval_id: str, d: until) -> result[opt[service.
 }
 
 pub fn list_inbox(c: pg.Conn, status_filter: str, kind_filter: str, d: until) -> result[[service.ApprovalInboxItem], str] {
-    let q = "select r.id::text, r.kind, r.subject_type, r.subject_id::text, r.payload_hash, " +
-        "r.requested_by::text, a.username as requester_username, coalesce(ar.role, 'staff') as requester_role, " +
+    let q = "select r.id::text as id, r.kind, r.subject_type, r.subject_id::text as subject_id, r.payload_hash, " +
+        "r.requested_by::text as requested_by, a.username as requester_username, coalesce(ar.role, 'staff') as requester_role, " +
         "(extract(epoch from r.created_at)*1000)::bigint as requested_at, " +
         "s.status, r.reason, " +
         "coalesce(r.reason, r.kind) as title " +
@@ -99,76 +119,64 @@ pub fn list_inbox(c: pg.Conn, status_filter: str, kind_filter: str, d: until) ->
         "  and ($2 = '' or r.kind = $2) " +
         "order by r.created_at desc limit 50";
 
-    let r = zokor.conn_query_all(c, q, [pg.arg_text(status_filter), pg.arg_text(kind_filter)], d);
+    let r: result[[InboxRow], str] = zokor.conn_query_all(c, q, [pg.arg_text(status_filter), pg.arg_text(kind_filter)], d);
     guard let rows = r else let e = err_of(r) { return err(e); }
 
     let out: [service.ApprovalInboxItem] = [];
     for row in rows {
-        let id = row.get_str("id");
-        let kind = row.get_str("kind");
-        let subject_id = row.get_str("subject_id");
-        let title = row.get_str("title");
-        let reason = row.get_str("reason");
-        let req_user = row.get_str("requester_username");
-        let req_role = row.get_str("requester_role");
-        let req_id = row.get_str("requested_by");
-        let req_at = row.get_int("requested_at");
-        let p_hash = row.get_str("payload_hash");
-        let status = row.get_str("status");
-
-        let sub_link = "/v1/admin/approvals/" + id;
-        if kind == "market_open" {
-            sub_link = "/v1/markets/" + subject_id;
-        } else if kind == "liquidity" || kind == "bot_topup" {
+        let sub_link = "/v1/admin/approvals/" + row.id;
+        if row.kind == "market_open" {
+            sub_link = "/v1/markets/" + row.subject_id;
+        } else if row.kind == "liquidity" || row.kind == "bot_topup" {
             sub_link = "/v1/admin/bots";
         }
 
         push(out, service.ApprovalInboxItem {
-            id: id,
-            kind: kind,
-            title: title,
-            detail: reason,
-            requested_by: service.RequesterInfo { username: req_user, role: req_role },
-            requester_account_id: req_id,
-            requested_at: req_at,
+            id: row.id,
+            kind: row.kind,
+            title: row.title,
+            detail: row.reason,
+            requested_by: service.RequesterInfo { username: row.requester_username, role: row.requester_role },
+            requester_account_id: row.requested_by,
+            requested_at: row.requested_at,
             can_decide: true,
             cannot_decide_reason: "",
             subject_link: sub_link,
-            payload_hash: p_hash,
-            status: status
+            payload_hash: row.payload_hash,
+            status: row.status
         });
     }
     return ok(out);
 }
 
 fn st_request(pool: pg.Pool, kind: str, subject_type: str, subject_id: str, hash: str, requester: str, round: int, slot: int, reason: str, now: int) -> result[str, str] {
-    let conn_r = pg.acquire(pool, until_max());
+    let conn_r = pg.acquire(pool, app_dl());
     guard let conn = conn_r else let e = err_of(conn_r) { return err(e); }
-    let r = request(conn, kind, subject_type, subject_id, hash, requester, round, slot, reason, now, until_max());
+    let r = request(conn, kind, subject_type, subject_id, hash, requester, round, slot, reason, now, app_dl());
     pg.release(pool, conn);
     return r;
 }
 
 fn st_load_by_id(pool: pg.Pool, id: str) -> result[opt[service.Request], str] {
-    let conn_r = pg.acquire(pool, until_max());
+    let conn_r = pg.acquire(pool, app_dl());
     guard let conn = conn_r else let e = err_of(conn_r) { return err(e); }
-    let r = load_by_id(conn, id, until_max());
+    let r = load_by_id(conn, id, app_dl());
     pg.release(pool, conn);
     return r;
 }
 
 fn st_list_inbox(pool: pg.Pool, status_filter: str, kind_filter: str) -> result[[service.ApprovalInboxItem], str] {
-    let conn_r = pg.acquire(pool, until_max());
+    let conn_r = pg.acquire(pool, app_dl());
     guard let conn = conn_r else let e = err_of(conn_r) { return err(e); }
-    let r = list_inbox(conn, status_filter, kind_filter, until_max());
+    let r = list_inbox(conn, status_filter, kind_filter, app_dl());
     pg.release(pool, conn);
     return r;
 }
 
 fn st_decide(pool: pg.Pool, req: service.Request, actor: str, decision: str, note: str, now: int) -> result[bool, str] {
-    let conn_r = pg.acquire(pool, until_max());
+    let conn_r = pg.acquire(pool, app_dl());
     guard let conn = conn_r else let e = err_of(conn_r) { return err(e); }
-    let r = decide(conn, req, actor, decision, note, now, until_max());
+    let r = decide(conn, req, actor, decision, note, now, app_dl());
     pg.release(pool, conn);
     return r;
 }

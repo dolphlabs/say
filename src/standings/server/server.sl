@@ -1,6 +1,5 @@
 // zokor:public
 import "http";
-import "strconv";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/auth" as auth;
@@ -16,11 +15,11 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     return 0;
 }
 
-fn register_errors(e: zokor.ErrorRegistry) {
-    zokor.register_error(e, "standings.unavailable", 503, "UNAVAILABLE", "Standings service is currently warming up or unavailable.");
+fn register_errors(e: zokor.Registry) {
+    zokor.register(e, "standings.unavailable", 503, "Standings service is currently warming up or unavailable.");
 }
 
-fn row_to_json(r: domain.StandingsRow) -> zokor.JObj {
+fn row_to_json(r: domain.StandingsRow) -> zokor.Json {
     let obj = zokor.jobj()
         .set_int("rank", r.rank_profit)
         .set_str("account_id", r.account_id)
@@ -35,7 +34,7 @@ fn row_to_json(r: domain.StandingsRow) -> zokor.JObj {
     return obj;
 }
 
-fn season_to_json(s: domain.SeasonInfo) -> zokor.JObj {
+fn season_to_json(s: domain.SeasonInfo) -> zokor.Json {
     let obj = zokor.jobj()
         .set_int("ordinal", s.ordinal)
         .set_str("status", s.status)
@@ -68,18 +67,18 @@ fn get_leaderboard_handler(c: zokor.Ctx[app.App]) -> http.Response {
 
     let podium_arr = zokor.jarr();
     for p in page.podium {
-        podium_arr.add_obj(row_to_json(p));
+        podium_arr.add(row_to_json(p));
     }
 
     let items_arr = zokor.jarr();
     for item in page.items {
-        items_arr.add_obj(row_to_json(item));
+        items_arr.add(row_to_json(item));
     }
 
     let out = zokor.jobj()
-        .set_obj("season", season_to_json(page.season))
-        .set_arr("podium", podium_arr)
-        .set_arr("items", items_arr)
+        .set("season", season_to_json(page.season))
+        .set("podium", podium_arr)
+        .set("items", items_arr)
         .set_str("next_cursor", page.next_cursor);
 
     if let me = page.me {
@@ -88,13 +87,13 @@ fn get_leaderboard_handler(c: zokor.Ctx[app.App]) -> http.Response {
             .set_int("of", me.of)
             .set_int("profit", me.profit)
             .set_str("percentile_label", me.percentile_label)
-            .set_obj("row", row_to_json(me.row));
+            .set("row", row_to_json(me.row));
         if let top20 = me.to_top20 {
             me_obj.set_int("to_top20", top20);
         } else {
-            me_obj.set_null("to_top20");
+            me_obj.set("to_top20", zokor.jnull());
         }
-        out.set_obj("me", me_obj);
+        out.set("me", me_obj);
     }
 
     return zokor.no_store(zokor.ok_json(out.render()));
@@ -109,9 +108,9 @@ fn get_strip_handler(c: zokor.Ctx[app.App]) -> http.Response {
 
     let items_arr = zokor.jarr();
     for item in strip {
-        items_arr.add_obj(row_to_json(item));
+        items_arr.add(row_to_json(item));
     }
 
-    let out = zokor.jobj().set_arr("items", items_arr);
+    let out = zokor.jobj().set("items", items_arr);
     return zokor.no_store(zokor.ok_json(out.render()));
 }

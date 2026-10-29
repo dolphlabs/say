@@ -1,6 +1,5 @@
 // zokor:public
 import "crypto";
-import "email";
 import "encoding";
 import "http";
 import "time";
@@ -357,7 +356,7 @@ fn change_username(c: zokor.Ctx[app.App]) -> http.Response {
     }
 
     // Get old username
-    let acc_r = accounts.account(c.state.accounts, session(c));
+    let acc_r = accounts.account_of(c.state.accounts, account_id);
     guard let opt_acc = acc_r else let _f = err_of(acc_r) {
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
@@ -389,13 +388,12 @@ fn request_email_change(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
 
-    let _ = email.send(c.state.mailer.context.email, email.EmailMessage {
-        from: c.state.mailer.context.from,
-        to: [body.new_email],
-        subject: "Confirm your new say email",
-        html: "<p>Your email change code is: <strong>" + req.code + "</strong></p>",
-        text: "Your email change code is: " + req.code,
-        tags: ["change_email"]
+    let send_mail = c.state.mailer.send;
+    let _s = send_mail(c.state.mailer.context, accounts.Mail {
+        to: body.new_email,
+        username: "",
+        purpose: "change_email",
+        code: req.code
     });
 
     let resp_body = zokor.jobj()
@@ -420,13 +418,12 @@ fn verify_email_change(c: zokor.Ctx[app.App]) -> http.Response {
     }
 
     if res.old_email != "" {
-        let _ = email.send(c.state.mailer.context.email, email.EmailMessage {
-            from: c.state.mailer.context.from,
-            to: [res.old_email],
-            subject: "Your say email address was changed",
-            html: "<p>Your say account email has been updated to " + res.new_email + ". If this wasn't you, contact support immediately.</p>",
-            text: "Your say account email has been updated to " + res.new_email,
-            tags: ["security_notice"]
+        let send_mail = c.state.mailer.send;
+        let _s = send_mail(c.state.mailer.context, accounts.Mail {
+            to: res.old_email,
+            username: "",
+            purpose: "security_notice",
+            code: ""
         });
     }
 
@@ -436,7 +433,7 @@ fn verify_email_change(c: zokor.Ctx[app.App]) -> http.Response {
 fn enroll_2fa(c: zokor.Ctx[app.App]) -> http.Response {
     let account_id = c.local("account_id");
 
-    let acc_r = accounts.account(c.state.accounts, session(c));
+    let acc_r = accounts.account_of(c.state.accounts, account_id);
     guard let opt_acc = acc_r else let _f = err_of(acc_r) {
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }

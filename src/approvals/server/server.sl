@@ -20,13 +20,13 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     return 0;
 }
 
-fn register_errors(e: zokor.ErrorRegistry) {
-    zokor.register_error(e, "approvals.forbidden", 403, "FORBIDDEN", "Forbidden: caller cannot decide this approval.");
-    zokor.register_error(e, "approvals.self_approval", 403, "SELF_APPROVAL_FORBIDDEN", "You asked for this, so someone else has to approve it.");
-    zokor.register_error(e, "approvals.stale", 409, "STALE_APPROVAL", "Approval request payload hash does not match or request expired.");
-    zokor.register_error(e, "approvals.not_found", 404, "NOT_FOUND", "Approval request not found.");
-    zokor.register_error(e, "approvals.totp_required", 403, "TOTP_REQUIRED", "Recent TOTP 2FA verification required for staff approval actions.");
-    zokor.register_error(e, "approvals.unavailable", 503, "UNAVAILABLE", "Approvals service temporarily unavailable.");
+fn register_errors(e: zokor.Registry) {
+    zokor.register(e, "approvals.forbidden", 403, "Forbidden: caller cannot decide this approval.");
+    zokor.register(e, "approvals.self_approval", 403, "You asked for this, so someone else has to approve it.");
+    zokor.register(e, "approvals.stale", 409, "Approval request payload hash does not match or request expired.");
+    zokor.register(e, "approvals.not_found", 404, "Approval request not found.");
+    zokor.register(e, "approvals.totp_required", 403, "Recent TOTP 2FA verification required for staff approval actions.");
+    zokor.register(e, "approvals.unavailable", 503, "Approvals service temporarily unavailable.");
 }
 
 gc struct DecisionDto {
@@ -65,7 +65,7 @@ fn list_approvals_handler(c: zokor.Ctx[app.App]) -> http.Response {
             .set_str("kind", it.kind)
             .set_str("title", it.title)
             .set_str("detail", it.detail)
-            .set_obj("requested_by", zokor.jobj()
+            .set("requested_by", zokor.jobj()
                 .set_str("username", it.requested_by.username)
                 .set_str("role", it.requested_by.role))
             .set_int("requested_at", it.requested_at)
@@ -76,10 +76,10 @@ fn list_approvals_handler(c: zokor.Ctx[app.App]) -> http.Response {
         if !can_decide {
             obj.set_str("cannot_decide_reason", reason);
         }
-        items_arr.add_obj(obj);
+        items_arr.add(obj);
     }
 
-    let out = zokor.jobj().set_arr("items", items_arr);
+    let out = zokor.jobj().set("items", items_arr);
     return zokor.no_store(zokor.ok_json(out.render()));
 }
 

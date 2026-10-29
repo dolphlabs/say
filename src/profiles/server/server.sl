@@ -14,18 +14,18 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     return 0;
 }
 
-fn register_errors(e: zokor.ErrorRegistry) {
-    zokor.register_error(e, "profiles.not_found", 404, "NOT_FOUND", "User profile not found or deleted.");
-    zokor.register_error(e, "profiles.unavailable", 503, "UNAVAILABLE", "Profile service temporarily unavailable.");
+fn register_errors(e: zokor.Registry) {
+    zokor.register(e, "profiles.not_found", 404, "User profile not found or deleted.");
+    zokor.register(e, "profiles.unavailable", 503, "Profile service temporarily unavailable.");
 }
 
-fn call_to_json(c: domain.CallItem) -> zokor.JObj {
+fn call_to_json(c: domain.CallItem) -> zokor.Json {
     let market_obj = zokor.jobj()
         .set_str("slug", c.market.slug)
         .set_str("question", c.market.question);
 
     let obj = zokor.jobj()
-        .set_obj("market", market_obj)
+        .set("market", market_obj)
         .set_str("side", c.side)
         .set_str("status", c.status);
 
@@ -35,7 +35,7 @@ fn call_to_json(c: domain.CallItem) -> zokor.JObj {
     return obj;
 }
 
-fn stats_to_json(s: domain.CurrentSeasonStats) -> zokor.JObj {
+fn stats_to_json(s: domain.CurrentSeasonStats) -> zokor.Json {
     return zokor.jobj()
         .set_int("rank", s.rank)
         .set_int("of", s.of)
@@ -45,10 +45,10 @@ fn stats_to_json(s: domain.CurrentSeasonStats) -> zokor.JObj {
         .set_int("settled", s.settled);
 }
 
-fn profile_to_json(p: domain.Profile) -> zokor.JObj {
+fn profile_to_json(p: domain.Profile) -> zokor.Json {
     let calls_arr = zokor.jarr();
     for c in p.calls {
-        calls_arr.add_obj(call_to_json(c));
+        calls_arr.add(call_to_json(c));
     }
 
     return zokor.jobj()
@@ -56,14 +56,14 @@ fn profile_to_json(p: domain.Profile) -> zokor.JObj {
         .set_str("avatar_color", p.avatar_color)
         .set_str("joined_season", p.joined_season)
         .set_str("share_url", p.share_url)
-        .set_obj("current_season", stats_to_json(p.current_season))
-        .set_arr("calls", calls_arr);
+        .set("current_season", stats_to_json(p.current_season))
+        .set("calls", calls_arr);
 }
 
 fn get_user_profile_handler(c: zokor.Ctx[app.App]) -> http.Response {
     let username = c.param("username");
     let now_ms = (time.mono() / 1000000) as int;
-    let base_url = c.state.settings.server.base_url;
+    let base_url = c.state.settings.auth.app_url;
 
     let res = profile_svc.get_profile(c.state.profiles, username, base_url, now_ms);
     guard let outcome = res else let e = err_of(res) {
@@ -76,9 +76,8 @@ fn get_user_profile_handler(c: zokor.Ctx[app.App]) -> http.Response {
     }
 
     if outcome.status == "REDIRECT" {
-        let resp = zokor.redirect("/v1/users/" + outcome.redirect_username, 301);
-        resp.headers["Cache-Control"] = "public, max-age=10";
-        return resp;
+        let resp = zokor.redirect(301, "/v1/users/" + outcome.redirect_username);
+        return http.with_header(resp, "Cache-Control", "public, max-age=10");
     }
 
     guard let prof = outcome.profile else {
@@ -87,6 +86,5 @@ fn get_user_profile_handler(c: zokor.Ctx[app.App]) -> http.Response {
 
     let body = profile_to_json(prof).render();
     let resp = zokor.ok_json(body);
-    resp.headers["Cache-Control"] = "public, max-age=10";
-    return resp;
+    return http.with_header(resp, "Cache-Control", "public, max-age=10");
 }

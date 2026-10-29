@@ -193,11 +193,11 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     let tr_store = treasury_store.make_postgres_treasury_store(d.pool);
     let tr_service = treasury.new_treasury_service(treasury_store.treasury_store(tr_store));
     let st_store = standings_store.new_store(d.pool);
-    let st_service = standings_svc.new_service(st_store);
+    let st_service = standings_svc.new_service(standings_store.standings_store(st_store));
     let pr_store = profile_store.new_store(d.pool);
-    let pr_service = profile_svc.new_service(pr_store);
+    let pr_service = profile_svc.new_service(profile_store.profile_store(pr_store));
     let au_store = audit_store.new_store(d.pool);
-    let au_service = audit_svc.new_service(au_store);
+    let au_service = audit_svc.new_service(audit_store.audit_store(au_store));
     let ap_store = approvals_store.approval_store(d.pool);
     let ap_service = approvals_svc.new_service(ap_store);
     let snapshot_queue:chan[exchange.SnapshotWrite]=make_chan(64);

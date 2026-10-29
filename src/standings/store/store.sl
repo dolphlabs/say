@@ -1,7 +1,8 @@
 import "pg";
+import "time";
 import "zokor";
 import "../domain" as domain;
-import "../service/ports" as ports;
+import "../service" as ports;
 
 pub gc struct PostgresStandingsStore {
     conn: pg.Pool
@@ -11,27 +12,57 @@ pub fn new_store(pool: pg.Pool) -> PostgresStandingsStore {
     return PostgresStandingsStore { conn: pool };
 }
 
+gc struct SeasonInfoSqlRow {
+    id: str,
+    ordinal: int,
+    status: str,
+    starts_at: int,
+    ends_at: int,
+    players: int,
+    unfinalized_markets: int
+}
+
+gc struct StandingsSqlRow {
+    account_id: str,
+    username: str,
+    avatar_color: str,
+    profit: int,
+    calls: int,
+    wins: int,
+    losses: int,
+    profit_reached_at: int,
+    rank_profit: int,
+    rank_win: opt[int],
+    rank_calls: int,
+    leaderboard_eligible: bool
+}
+
+fn st_dl() -> until {
+    return until_of(time.mono() + 5000000000);
+}
+
 pub fn get_current_season(s: PostgresStandingsStore) -> result[opt[domain.SeasonInfo], str] {
-    let r = zokor.pool_query_all(s.conn,
-        "select s.id::text, s.ordinal, s.status, " +
+    let empty_args: [pg.Arg] = [];
+    let r: result[[SeasonInfoSqlRow], str] = zokor.query_all(s.conn,
+        "select s.id::text as id, s.ordinal, s.status, " +
         "(extract(epoch from s.starts_at)*1000)::bigint as starts_at, " +
         "(extract(epoch from s.ends_at)*1000)::bigint as ends_at, " +
         "(select count(*) from accounts a where a.status = 'ACTIVE' and a.kind = 'USER' and a.leaderboard_eligible = true)::int as players, " +
         "(select count(*) from markets m where m.season_id = s.id and m.status not in ('FINALIZED', 'VOIDED'))::int as unfinalized_markets " +
         "from seasons s where s.status in ('ACTIVE', 'CLOSED', 'FINALIZED') order by s.ordinal desc limit 1",
-        [], until_max());
+        empty_args, st_dl());
     guard let rows = r else let e = err_of(r) { return err(e); }
     if len(rows) == 0 {
         let none_val: opt[domain.SeasonInfo] = none;
         return ok(none_val);
     }
     let row = rows[0];
-    let ordinal = row.get_int("ordinal");
-    let status = row.get_str("status");
-    let starts_at = row.get_int("starts_at");
-    let ends_at = row.get_int("ends_at");
-    let players = row.get_int("players");
-    let unfinalized = row.get_int("unfinalized_markets");
+    let ordinal = row.ordinal;
+    let status = row.status;
+    let starts_at = row.starts_at;
+    let ends_at = row.ends_at;
+    let players = row.players;
+    let unfinalized = row.unfinalized_markets;
     let provisional = (status == "CLOSED" || status == "CLOSING") && unfinalized > 0;
     let reason = "";
     if provisional {
@@ -49,8 +80,7 @@ pub fn get_current_season(s: PostgresStandingsStore) -> result[opt[domain.Season
 }
 
 pub fn load_standings_rows(s: PostgresStandingsStore, season_ordinal: int, sort_by: str, limit_n: int) -> result[[domain.StandingsRow], str] {
-    let q = if sort_by == "win_rate" {
-        "select ss.account_id::text, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
+    let q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
         "ss.profit, ss.calls, ss.wins, ss.losses, " +
         "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
         "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
@@ -58,55 +88,48 @@ pub fn load_standings_rows(s: PostgresStandingsStore, season_ordinal: int, sort_
         "join accounts a on a.id = ss.account_id " +
         "join seasons s on s.id = ss.season_id " +
         "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
-        "and ss.rank_win is not null order by ss.rank_win asc, ss.profit desc limit $2"
+        "order by ss.profit desc, ss.profit_reached_at asc, ss.account_id asc limit $2";
+    if sort_by == "win_rate" {
+        q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
+            "ss.profit, ss.calls, ss.wins, ss.losses, " +
+            "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
+            "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
+            "from season_standings ss " +
+            "join accounts a on a.id = ss.account_id " +
+            "join seasons s on s.id = ss.season_id " +
+            "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
+            "and ss.rank_win is not null order by ss.rank_win asc, ss.profit desc limit $2";
     } else if sort_by == "calls" {
-        "select ss.account_id::text, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
-        "ss.profit, ss.calls, ss.wins, ss.losses, " +
-        "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
-        "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
-        "from season_standings ss " +
-        "join accounts a on a.id = ss.account_id " +
-        "join seasons s on s.id = ss.season_id " +
-        "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
-        "order by ss.rank_calls asc, ss.profit desc limit $2"
-    } else {
-        "select ss.account_id::text, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
-        "ss.profit, ss.calls, ss.wins, ss.losses, " +
-        "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
-        "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
-        "from season_standings ss " +
-        "join accounts a on a.id = ss.account_id " +
-        "join seasons s on s.id = ss.season_id " +
-        "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
-        "order by ss.profit desc, ss.profit_reached_at asc, ss.account_id asc limit $2"
-    };
+        q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
+            "ss.profit, ss.calls, ss.wins, ss.losses, " +
+            "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
+            "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
+            "from season_standings ss " +
+            "join accounts a on a.id = ss.account_id " +
+            "join seasons s on s.id = ss.season_id " +
+            "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
+            "order by ss.rank_calls asc, ss.profit desc limit $2";
+    }
 
-    let r = zokor.pool_query_all(s.conn, q, [pg.arg_int(season_ordinal), pg.arg_int(limit_n)], until_max());
+    let r: result[[StandingsSqlRow], str] = zokor.query_all(s.conn, q, [pg.arg_int(season_ordinal), pg.arg_int(limit_n)], st_dl());
     guard let rows = r else let e = err_of(r) { return err(e); }
 
     let out: [domain.StandingsRow] = [];
     for row in rows {
-        let wins = row.get_int("wins");
-        let losses = row.get_int("losses");
-        let rank_win_int = row.get_int("rank_win");
-        let opt_rank_win: opt[int] = none;
-        if rank_win_int > 0 {
-            opt_rank_win = some(rank_win_int);
-        }
         push(out, domain.StandingsRow {
-            account_id: row.get_str("account_id"),
-            username: row.get_str("username"),
-            avatar_color: row.get_str("avatar_color"),
-            profit: row.get_int("profit"),
-            calls: row.get_int("calls"),
-            wins: wins,
-            losses: losses,
-            profit_reached_at: row.get_int("profit_reached_at"),
-            rank_profit: row.get_int("rank_profit"),
-            rank_win: opt_rank_win,
-            rank_calls: row.get_int("rank_calls"),
-            win_rate: domain.calculate_win_rate(wins, losses),
-            leaderboard_eligible: row.get_bool("leaderboard_eligible")
+            account_id: row.account_id,
+            username: row.username,
+            avatar_color: row.avatar_color,
+            profit: row.profit,
+            calls: row.calls,
+            wins: row.wins,
+            losses: row.losses,
+            profit_reached_at: row.profit_reached_at,
+            rank_profit: row.rank_profit,
+            rank_win: row.rank_win,
+            rank_calls: row.rank_calls,
+            win_rate: domain.calculate_win_rate(row.wins, row.losses),
+            leaderboard_eligible: row.leaderboard_eligible
         });
     }
     return ok(out);
@@ -172,7 +195,7 @@ pub fn recompute_season_standings(s: PostgresStandingsStore, now_ms: int) -> res
         "  rank_calls = excluded.rank_calls, " +
         "  computed_at = excluded.computed_at";
 
-    let r = zokor.pool_query(s.conn, q, [pg.arg_int(now_ms)], until_max());
+    let r = pg.pool_query(s.conn, q, [pg.arg_int(now_ms)], st_dl());
     guard let _n = r else let e = err_of(r) { return err(e); }
     return ok(1);
 }
@@ -184,7 +207,7 @@ pub fn freeze_final_standings(s: PostgresStandingsStore, season_id: str, now_ms:
         "join accounts a on a.id = ss.account_id " +
         "where ss.season_id = $1::uuid " +
         "on conflict (season_id, account_id) do nothing";
-    let r = zokor.pool_query(s.conn, q, [pg.arg_text(season_id), pg.arg_int(now_ms)], until_max());
+    let r = pg.pool_query(s.conn, q, [pg.arg_text(season_id), pg.arg_int(now_ms)], st_dl());
     guard let _n = r else let e = err_of(r) { return err(e); }
     return ok(true);
 }

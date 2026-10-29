@@ -1,7 +1,8 @@
 import "pg";
+import "time";
 import "zokor";
 import "../domain" as domain;
-import "../service/ports" as ports;
+import "../service" as ports;
 
 pub gc struct PostgresProfileStore {
     conn: pg.Pool
@@ -11,39 +12,72 @@ pub fn new_store(pool: pg.Pool) -> PostgresProfileStore {
     return PostgresProfileStore { conn: pool };
 }
 
+gc struct AccountLookupDbRow {
+    id: str,
+    username: str,
+    avatar_color: str,
+    status: str,
+    created_at_ms: int
+}
+
+gc struct UsernameHistoryDbRow {
+    current_username: str
+}
+
+gc struct ProfileCallDbRow {
+    slug: str,
+    question: str,
+    side: str,
+    status: str,
+    chance_pct: opt[int]
+}
+
+gc struct CurrentStatsDbRow {
+    rank: int,
+    of: int,
+    profit: int,
+    calls: int,
+    right_count: int,
+    settled: int
+}
+
+fn pr_dl() -> until {
+    return until_of(time.mono() + 5000000000);
+}
+
 pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.AccountLookup, str] {
-    let r = zokor.pool_query_all(s.conn,
-        "select id::text, username, coalesce(avatar_color, '#e91e63') as avatar_color, status, " +
+    let r: result[[AccountLookupDbRow], str] = zokor.query_all(s.conn,
+        "select id::text as id, username, coalesce(avatar_color, '#e91e63') as avatar_color, status, " +
         "(extract(epoch from created_at)*1000)::bigint as created_at_ms " +
         "from accounts where lower(username) = lower($1)",
-        [pg.arg_text(raw_username)], until_max());
+        [pg.arg_text(raw_username)], pr_dl());
     guard let rows = r else let e = err_of(r) { return err(e); }
     if len(rows) > 0 {
         let row = rows[0];
         return ok(ports.AccountLookup {
             found: true,
             redirect_username: "",
-            account_id: row.get_str("id"),
-            username: row.get_str("username"),
-            avatar_color: row.get_str("avatar_color"),
-            status: row.get_str("status"),
-            created_at_ms: row.get_int("created_at_ms")
+            account_id: row.id,
+            username: row.username,
+            avatar_color: row.avatar_color,
+            status: row.status,
+            created_at_ms: row.created_at_ms
         });
     }
 
-    let rh = zokor.pool_query_all(s.conn,
+    let rh: result[[UsernameHistoryDbRow], str] = zokor.query_all(s.conn,
         "select a.username as current_username " +
         "from username_history uh " +
         "join accounts a on a.id = uh.account_id " +
         "join username_reservations ur on ur.account_id = uh.account_id and lower(ur.username) = lower(uh.old_username) " +
         "where lower(uh.old_username) = lower($1) and ur.reserved_until > now() " +
         "order by uh.changed_at desc limit 1",
-        [pg.arg_text(raw_username)], until_max());
+        [pg.arg_text(raw_username)], pr_dl());
     guard let h_rows = rh else let e = err_of(rh) { return err(e); }
     if len(h_rows) > 0 {
         return ok(ports.AccountLookup {
             found: true,
-            redirect_username: h_rows[0].get_str("current_username"),
+            redirect_username: h_rows[0].current_username,
             account_id: "",
             username: "",
             avatar_color: "",
@@ -83,24 +117,19 @@ pub fn load_profile_calls(s: PostgresProfileStore, account_id: str) -> result[[d
         "where p.account_id = $1::uuid and (p.total_shares > 0 or pr.id is not null) " +
         "order by p.updated_at desc limit 50";
 
-    let r = zokor.pool_query_all(s.conn, q, [pg.arg_text(account_id)], until_max());
+    let r: result[[ProfileCallDbRow], str] = zokor.query_all(s.conn, q, [pg.arg_text(account_id)], pr_dl());
     guard let rows = r else let e = err_of(r) { return err(e); }
 
     let calls: [domain.CallItem] = [];
     for row in rows {
-        let chance_int = row.get_int("chance_pct");
-        let opt_chance: opt[int] = none;
-        if chance_int > 0 {
-            opt_chance = some(chance_int);
-        }
         push(calls, domain.CallItem {
             market: domain.MarketSummary {
-                slug: row.get_str("slug"),
-                question: row.get_str("question")
+                slug: row.slug,
+                question: row.question
             },
-            side: row.get_str("side"),
-            status: row.get_str("status"),
-            chance_pct: opt_chance
+            side: row.side,
+            status: row.status,
+            chance_pct: row.chance_pct
         });
     }
     return ok(calls);
@@ -117,7 +146,7 @@ pub fn load_current_stats(s: PostgresProfileStore, account_id: str) -> result[do
         "left join season_standings ss on ss.season_id = cs.id and ss.account_id = $1::uuid " +
         "where cs.status in ('ACTIVE', 'CLOSED') order by cs.ordinal desc limit 1";
 
-    let r = zokor.pool_query_all(s.conn, q, [pg.arg_text(account_id)], until_max());
+    let r: result[[CurrentStatsDbRow], str] = zokor.query_all(s.conn, q, [pg.arg_text(account_id)], pr_dl());
     guard let rows = r else let e = err_of(r) { return err(e); }
     if len(rows) == 0 {
         return ok(domain.CurrentSeasonStats {
@@ -131,12 +160,12 @@ pub fn load_current_stats(s: PostgresProfileStore, account_id: str) -> result[do
     }
     let row = rows[0];
     return ok(domain.CurrentSeasonStats {
-        rank: row.get_int("rank"),
-        of: row.get_int("of"),
-        profit: row.get_int("profit"),
-        calls: row.get_int("calls"),
-        right: row.get_int("right_count"),
-        settled: row.get_int("settled")
+        rank: row.rank,
+        of: row.of,
+        profit: row.profit,
+        calls: row.calls,
+        right: row.right_count,
+        settled: row.settled
     });
 }
 

@@ -1,6 +1,5 @@
 // zokor:public
 import "http";
-import "strconv";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/auth" as auth;
@@ -20,17 +19,15 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     return 0;
 }
 
-fn register_errors(e: zokor.ErrorRegistry) {
-    zokor.register_error(e, "audit.forbidden", 403, "FORBIDDEN", "Forbidden: caller cannot access audit logs.");
-    zokor.register_error(e, "audit.not_found", 404, "NOT_FOUND", "Audit export not found or expired.");
-    zokor.register_error(e, "audit.unavailable", 503, "UNAVAILABLE", "Audit service temporarily unavailable.");
+fn register_errors(e: zokor.Registry) {
+    zokor.register(e, "audit.forbidden", 403, "Forbidden: caller cannot access audit logs.");
+    zokor.register(e, "audit.not_found", 404, "Audit export not found or expired.");
+    zokor.register(e, "audit.unavailable", 503, "Audit service temporarily unavailable.");
 }
 
 fn parse_int_or(s: str, default_val: int) -> int {
     if s == "" { return default_val; }
-    let p = strconv.parse_int(s);
-    if let v = p { return v; }
-    return default_val;
+    return to_int(s) ?? default_val;
 }
 
 fn check_staff(c: zokor.Ctx[app.App]) -> bool {
@@ -68,7 +65,7 @@ fn query_audit_handler(c: zokor.Ctx[app.App]) -> http.Response {
 
     let items_arr = zokor.jarr();
     for it in page.items {
-        items_arr.add_obj(zokor.jobj()
+        items_arr.add(zokor.jobj()
             .set_str("id", it.id)
             .set_str("actor_id", it.actor_id)
             .set_str("actor_kind", it.actor_kind)
@@ -82,7 +79,7 @@ fn query_audit_handler(c: zokor.Ctx[app.App]) -> http.Response {
     }
 
     let out = zokor.jobj()
-        .set_arr("items", items_arr)
+        .set("items", items_arr)
         .set_str("next_cursor", page.next_cursor);
 
     return zokor.no_store(zokor.ok_json(out.render()));
@@ -94,7 +91,7 @@ fn export_audit_handler(c: zokor.Ctx[app.App]) -> http.Response {
     }
 
     let account_id = c.local("account_id");
-    let base_url = c.state.settings.server.base_url;
+    let base_url = c.state.settings.auth.app_url;
 
     let filter = domain.AuditFilter {
         area: c.query("area"),
@@ -137,8 +134,6 @@ fn download_export_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "audit.not_found", c.request_id);
     }
 
-    let resp = zokor.no_store(zokor.ok_text(csv));
-    resp.headers["Content-Type"] = "text/csv";
-    resp.headers["Content-Disposition"] = "attachment; filename=\"audit_export.csv\"";
-    return resp;
+    let resp = zokor.no_store(http.text_response(200, "OK", "text/csv", csv));
+    return http.with_header(resp, "Content-Disposition", "attachment; filename=\"audit_export.csv\"");
 }
