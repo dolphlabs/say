@@ -16,11 +16,11 @@ fn fake_store() -> FakeTreasuryStore {
         calls: calls,
         summary_data: domain.TreasurySummary {
             given_to_players: 1000000,
-            bot_budget: domain.BotBudgetInfo { allocated: 50000, cap: 100000 },
+            bot_budget: domain.BotBudgetInfo { allocated: 50000, cap: some(100000) },
             collateral_held: 20000,
             fees_collected: 5000,
             season_grants_next: none,
-            books_balanced: true,
+            books_balanced: some(true),
             incident_banner: none
         },
         bots_data: [],

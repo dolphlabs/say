@@ -4,6 +4,7 @@ import "time";
 import "zokor";
 import "../domain" as domain;
 import "../service" as service;
+import "../../ledger/store" as ledger_store;
 
 pub gc struct PostgresTreasuryStore {
     pool: pg.Pool
@@ -81,67 +82,69 @@ fn exec_sql(pool: pg.Pool, sql: str, args: [pg.Arg], d: until) -> result[int, st
     return ok(len(rows));
 }
 
+gc struct SummaryRow {
+    found: bool,
+    given: int,
+    allocated: int,
+    collateral: int,
+    fees: int,
+    books_balanced: opt[bool],
+    halt_reason: opt[str],
+    grant_policy_id: opt[str],
+    grant_amount: opt[int],
+    grant_players: int,
+    next_season_at: opt[str]
+}
+
+// Every figure is read from the journal or its read models for one season;
+// a failed read fails the summary rather than showing a zero as if it were real.
 fn pg_get_summary(s: PostgresTreasuryStore, season_id: str) -> result[domain.TreasurySummary, str] {
-    let empty_args: [pg.Arg] = [];
-    let given_q = "select coalesce(sum(amount), 0)::bigint as val from ledger_journal where kind = 'SEASON_GRANT'";
-    let given_res: result[[SumRow], str] = zokor.query_all(s.pool, given_q, empty_args, pg_deadline());
-    let given = 0;
-    if let rows = given_res {
-        if len(rows) > 0 { given = rows[0].val; }
+    let q = "with s as (select id from seasons where ($1 = '' and status in ('ACTIVE','CLOSING')) or id::text = $1 " +
+            "order by starts_at desc limit 1), " +
+            "p as (select id, amount from issuance_policies where status = 'PROPOSED' order by created_at desc limit 1) " +
+            "select exists(select 1 from s) as found, " +
+            "coalesce((select sum(g.amount) from issuance_grants g where g.season_id = (select id from s)), 0)::bigint as given, " +
+            "coalesce((select sum(b.allocated) from bot_markets b where b.season_id = (select id from s)), 0)::bigint as allocated, " +
+            "coalesce((select sum(m.issued_pairs * m.redemption_units) from markets m where m.season_id = (select id from s) " +
+            "and m.status not in ('DRAFT','REVIEW','APPROVED','FUNDING','SETTLED','VOIDED')), 0)::bigint as collateral, " +
+            "coalesce((select sum(e.delta) from wallets w join ledger_entries e on e.wallet_id = w.id " +
+            "where w.season_id = (select id from s) and w.owner_id = 'system:fees' and w.asset_key = 'SEDI'), 0)::bigint as fees, " +
+            "(select r.ok from reconciliation_runs r where r.status = 'done' order by r.finished_at desc limit 1) as books_balanced, " +
+            "(select h.reason from trading_halt h where h.id = 1 and h.halted) as halt_reason, " +
+            "(select p.id::text from p) as grant_policy_id, " +
+            "(select p.amount from p) as grant_amount, " +
+            "(select count(*) from accounts a where a.kind = 'USER' and a.status = 'ACTIVE' and a.email_verified_at is not null)::bigint as grant_players, " +
+            "(select to_char(n.starts_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') from seasons n " +
+            "where n.status = 'SCHEDULED' order by n.starts_at limit 1) as next_season_at";
+    let res: result[[SummaryRow], str] = zokor.query_all(s.pool, q, [pg.arg_text(season_id)], pg_deadline());
+    guard let rows = res else let e = err_of(res) {
+        return err(e);
     }
-
-    let alloc_q = "select coalesce(sum(allocated), 0)::bigint as val from bot_markets";
-    let alloc_res: result[[SumRow], str] = zokor.query_all(s.pool, alloc_q, empty_args, pg_deadline());
-    let allocated = 0;
-    if let rows = alloc_res {
-        if len(rows) > 0 { allocated = rows[0].val; }
+    if len(rows) != 1 || !rows[0].found {
+        return err("SEASON_NOT_FOUND");
     }
-
-    let cap_q = "select coalesce(max((payload->>'cap')::bigint), 750000)::bigint as val from approvals where kind = 'bot_season_budget' and status = 'approved'";
-    let cap_res: result[[SumRow], str] = zokor.query_all(s.pool, cap_q, empty_args, pg_deadline());
-    let cap = 750000;
-    if let rows = cap_res {
-        if len(rows) > 0 { cap = rows[0].val; }
+    let row = rows[0];
+    let grants: opt[domain.SeasonGrantsInfo] = none;
+    if let policy_id = row.grant_policy_id {
+        let amount = row.grant_amount ?? 0;
+        grants = some(domain.SeasonGrantsInfo {
+            at: row.next_season_at ?? "",
+            amount: amount,
+            approx_players: row.grant_players,
+            approx_total: amount * row.grant_players,
+            approval_id: policy_id,
+            status: "WAITING_SECOND_APPROVAL"
+        });
     }
-
-    let coll_q = "select coalesce(sum(collateral), 0)::bigint as val from markets where status in ('OPEN', 'SUSPENDED', 'CLOSED', 'RESOLUTION_PENDING')";
-    let coll_res: result[[SumRow], str] = zokor.query_all(s.pool, coll_q, empty_args, pg_deadline());
-    let collateral = 0;
-    if let rows = coll_res {
-        if len(rows) > 0 { collateral = rows[0].val; }
-    }
-
-    let fee_q = "select coalesce(sum(amount), 0)::bigint as val from ledger_journal where kind = 'FEE'";
-    let fee_res: result[[SumRow], str] = zokor.query_all(s.pool, fee_q, empty_args, pg_deadline());
-    let fees = 0;
-    if let rows = fee_res {
-        if len(rows) > 0 { fees = rows[0].val; }
-    }
-
-    let none_grant: opt[domain.SeasonGrantsInfo] = none;
-    let grant_q = "select id::text as val from approvals where kind = 'season_grants' and status in ('proposed', 'pending') limit 1";
-    let grant_res: result[[TextRow], str] = zokor.query_all(s.pool, grant_q, empty_args, pg_deadline());
-    if let rows = grant_res {
-        if len(rows) > 0 {
-            none_grant = some(domain.SeasonGrantsInfo {
-                at: "2026-11-01T00:00:00Z",
-                approx_players: 3180,
-                approx_total: 3180000,
-                approval_id: rows[0].val,
-                status: "WAITING_SECOND_APPROVAL"
-            });
-        }
-    }
-
-    let none_banner: opt[str] = none;
+    let no_cap: opt[int] = none;
     return ok(domain.TreasurySummary {
-        given_to_players: given,
-        bot_budget: domain.BotBudgetInfo { allocated: allocated, cap: cap },
-        collateral_held: collateral,
-        fees_collected: fees,
-        season_grants_next: none_grant,
-        books_balanced: true,
-        incident_banner: none_banner
+        given_to_players: row.given,
+        bot_budget: domain.BotBudgetInfo { allocated: row.allocated, cap: no_cap },
+        collateral_held: row.collateral,
+        fees_collected: row.fees,
+        season_grants_next: grants,
+        books_balanced: row.books_balanced,
+        incident_banner: row.halt_reason
     });
 }
 
@@ -252,19 +255,22 @@ fn pg_set_status(s: PostgresTreasuryStore, bot_id: str, market_id: str, status: 
     return ok(true);
 }
 
-fn pg_set_all_paused(s: PostgresTreasuryStore, paused: bool, reason: str) -> result[bool, str] {
-    let q = "update trading_halt set bots_paused = $1, reason = $2, halted_at = now()";
-    let res = exec_sql(s.pool, q, [pg.arg_bool(paused), pg.arg_text(reason)], pg_deadline());
-    guard let _n = res else let e = err_of(res) {
-        return err(e);
-    }
-    let bm_status = "QUOTING";
-    if paused {
-        bm_status = "PAUSED_ALL";
-    }
-    let q2 = "update bot_markets set status = $1, status_reason = $2, updated_at = now()";
-    let _r2 = exec_sql(s.pool, q2, [pg.arg_text(bm_status), pg.arg_text(reason)], pg_deadline());
+gc struct PauseAllArg { paused: bool, reason: str }
+
+fn set_all_paused_tx(c: pg.Conn, arg: PauseAllArg) -> result[bool, str] {
+    let updated = ledger_store.set_bots_paused(c, arg.paused, pg_deadline());
+    guard let _ok = updated else let e = err_of(updated) { return err(e); }
+    let from_status = "PAUSED_ALL";
+    let to_status = "QUOTING";
+    if arg.paused { from_status = "QUOTING"; to_status = "PAUSED_ALL"; }
+    let r = pg.query(c, "update bot_markets set status = $1, status_reason = $2, updated_at = now() where status = $3",
+        [pg.arg_text(to_status), pg.arg_text(arg.reason), pg.arg_text(from_status)], pg_deadline());
+    guard let _n = r else let e = err_of(r) { return err(e); }
     return ok(true);
+}
+
+fn pg_set_all_paused(s: PostgresTreasuryStore, paused: bool, reason: str) -> result[bool, str] {
+    return zokor.transaction(s.pool, PauseAllArg { paused: paused, reason: reason }, set_all_paused_tx, pg_deadline());
 }
 
 fn pg_is_all_paused(s: PostgresTreasuryStore) -> result[bool, str] {

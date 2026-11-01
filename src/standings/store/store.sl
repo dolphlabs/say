@@ -146,28 +146,43 @@ pub fn recompute_season_standings(s: PostgresStandingsStore, now_ms: int) -> res
         "    and not exists (select 1 from account_roles ar where ar.account_id = a.id and ar.role in ('curator','treasury','resolver','admin','super_admin')) " +
         "), " +
         "cash_totals as ( " +
-        "  select w.account_id, coalesce(w.available_units + w.held_units, 0)::bigint as cash " +
-        "  from wallets w where w.asset = 'SEDI' " +
+        "  select w.account_id, sum(w.free_units + w.held_units)::bigint as cash " +
+        "  from wallets w join current_season cs on cs.id = w.season_id " +
+        "  where w.asset_key = 'SEDI' and w.account_id is not null group by w.account_id " +
+        "), " +
+        "position_values as ( " +
+        "  select p.account_id, sum(case " +
+        "    when ms.last_price is null then p.cost_basis " +
+        "    when p.outcome = 'YES' then p.qty * ms.last_price " +
+        "    else p.qty * (m.redemption_units - ms.last_price) end)::bigint as value " +
+        "  from positions p join current_season cs on cs.id = p.season_id " +
+        "  join markets m on m.id = p.market_id left join market_stats ms on ms.market_id = p.market_id " +
+        "  where p.qty > 0 group by p.account_id " +
+        "), " +
+        "grants as ( " +
+        "  select g.account_id, g.amount from issuance_grants g join current_season cs on cs.id = g.season_id " +
         "), " +
         "user_calls as ( " +
         "  select p.account_id, count(distinct p.market_id)::int as calls " +
-        "  from positions p group by p.account_id " +
+        "  from positions p join current_season cs on cs.id = p.season_id group by p.account_id " +
         "), " +
         "user_results as ( " +
         "  select pr.account_id, " +
-        "    count(case when pr.payout_units > pr.cost_units then 1 end)::int as wins, " +
-        "    count(case when pr.payout_units < pr.cost_units then 1 end)::int as losses " +
-        "  from position_results pr group by pr.account_id " +
+        "    count(*) filter (where pr.result = 'WON')::int as wins, " +
+        "    count(*) filter (where pr.result = 'LOST')::int as losses " +
+        "  from position_results pr join current_season cs on cs.id = pr.season_id group by pr.account_id " +
         "), " +
         "calculated as ( " +
         "  select ea.id as account_id, cs.id as season_id, " +
-        "    coalesce(ct.cash, 0) - 1000 as profit, " +
+        "    coalesce(ct.cash, 0) + coalesce(pv.value, 0) - coalesce(g.amount, 0) as profit, " +
         "    coalesce(uc.calls, 0) as calls, " +
         "    coalesce(ur.wins, 0) as wins, " +
         "    coalesce(ur.losses, 0) as losses " +
         "  from eligible_accounts ea " +
         "  cross join current_season cs " +
         "  left join cash_totals ct on ct.account_id = ea.id " +
+        "  left join position_values pv on pv.account_id = ea.id " +
+        "  left join grants g on g.account_id = ea.id " +
         "  left join user_calls uc on uc.account_id = ea.id " +
         "  left join user_results ur on ur.account_id = ea.id " +
         "), " +
@@ -175,7 +190,7 @@ pub fn recompute_season_standings(s: PostgresStandingsStore, now_ms: int) -> res
         "  select c.*, " +
         "    row_number() over (partition by c.season_id order by c.profit desc, ea.created_at asc, c.account_id asc)::int as r_profit, " +
         "    case when (c.wins + c.losses) >= 5 then " +
-        "      row_number() over (partition by c.season_id order by (c.wins::numeric / (c.wins + c.losses)::numeric) desc, c.profit desc)::int " +
+        "      row_number() over (partition by c.season_id order by (c.wins::numeric / nullif(c.wins + c.losses, 0)::numeric) desc nulls last, c.profit desc)::int " +
         "    else null end as r_win, " +
         "    row_number() over (partition by c.season_id order by c.calls desc, c.profit desc)::int as r_calls " +
         "  from calculated c " +

@@ -298,7 +298,15 @@ fn show_me(c: zokor.Ctx[app.App]) -> http.Response {
             }
         }
     }
-    return zokor.no_store(zokor.ok_json(user_json(account, changeable).render()));
+    let rr = accounts.roles_of(c.state.accounts, id);
+    guard let roles = rr else let f = err_of(rr) {
+        return failure(c, f);
+    }
+    let role_list = zokor.jarr();
+    for role in roles {
+        role_list.add_str(role);
+    }
+    return zokor.no_store(zokor.ok_json(user_json(account, changeable).set("roles", role_list).render()));
 }
 
 fn change_password(c: zokor.Ctx[app.App]) -> http.Response {
@@ -362,7 +370,7 @@ fn change_username(c: zokor.Ctx[app.App]) -> http.Response {
     }
     let old_username = opt_acc.username;
 
-    let now_ms = (time.mono() / 1000000) as int;
+    let now_ms = (time.wall() / 1000000) as int;
     let chg_r = accounts.change_username(c.state.accounts, account_id, old_username, body.username, now_ms);
     guard let _ok = chg_r else let e = err_of(chg_r) {
         if e == "USERNAME_CHANGE_WINDOW_CLOSED" {
@@ -456,7 +464,7 @@ fn verify_2fa(c: zokor.Ctx[app.App]) -> http.Response {
     guard let body = dr else let bad = err_of(dr) { return bad; }
 
     let account_id = c.local("account_id");
-    let now_sec = (time.mono() / 1000000000) as int;
+    let now_sec = (time.wall() / 1000000000) as int;
     let sess_token = auth.session_token(c);
     let sess_hash = encoding.hex_encode(crypto.sha256(to_bytes(sess_token)));
 
@@ -476,7 +484,7 @@ fn disable_2fa(c: zokor.Ctx[app.App]) -> http.Response {
     guard let body = dr else let bad = err_of(dr) { return bad; }
 
     let account_id = c.local("account_id");
-    let now_sec = (time.mono() / 1000000000) as int;
+    let now_sec = (time.wall() / 1000000000) as int;
 
     let dis_r = accounts.disable_totp(c.state.accounts, account_id, body.code, now_sec);
     guard let _ok = dis_r else let e = err_of(dis_r) {
@@ -522,7 +530,7 @@ fn grant_role_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.ok_json("{\"status\":\"granted\"}");
     }
 
-    let now_ms = (time.mono() / 1000000) as int;
+    let now_ms = (time.wall() / 1000000) as int;
     let payload = zokor.jobj().set_str("username", body.username).set_str("role", body.role).set_str("reason", body.reason).render();
     let p_hash = encoding.hex_encode(crypto.sha256(to_bytes(payload)));
 

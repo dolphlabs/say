@@ -17,7 +17,8 @@ gc struct AccountLookupDbRow {
     username: str,
     avatar_color: str,
     status: str,
-    created_at_ms: int
+    created_at_ms: int,
+    joined_season: str
 }
 
 gc struct UsernameHistoryDbRow {
@@ -48,8 +49,11 @@ fn pr_dl() -> until {
 pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.AccountLookup, str] {
     let r: result[[AccountLookupDbRow], str] = zokor.query_all(s.conn,
         "select id::text as id, username, coalesce(avatar_color, '#e91e63') as avatar_color, status, " +
-        "(extract(epoch from created_at)*1000)::bigint as created_at_ms " +
-        "from accounts where lower(username) = lower($1)",
+        "(extract(epoch from a.created_at)*1000)::bigint as created_at_ms, " +
+        "coalesce((select 'Season ' || lpad(s.ordinal::text, 2, '0') from seasons s " +
+        "where s.starts_at <= greatest(a.created_at, (select min(starts_at) from seasons)) " +
+        "order by s.starts_at desc limit 1), '') as joined_season " +
+        "from accounts a where lower(a.username) = lower($1)",
         [pg.arg_text(raw_username)], pr_dl());
     guard let rows = r else let e = err_of(r) { return err(e); }
     if len(rows) > 0 {
@@ -61,7 +65,8 @@ pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.Acc
             username: row.username,
             avatar_color: row.avatar_color,
             status: row.status,
-            created_at_ms: row.created_at_ms
+            created_at_ms: row.created_at_ms,
+            joined_season: row.joined_season
         });
     }
 
@@ -82,7 +87,8 @@ pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.Acc
             username: "",
             avatar_color: "",
             status: "",
-            created_at_ms: 0
+            created_at_ms: 0,
+            joined_season: ""
         });
     }
 
@@ -93,28 +99,25 @@ pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.Acc
         username: "",
         avatar_color: "",
         status: "",
-        created_at_ms: 0
+        created_at_ms: 0,
+        joined_season: ""
     });
 }
 
 pub fn load_profile_calls(s: PostgresProfileStore, account_id: str) -> result[[domain.CallItem], str] {
     let q = "select m.slug, m.question, p.outcome as side, " +
+        "coalesce(pr.result, 'OPEN') as status, " +
         "case " +
-        "  when m.status in ('RESOLVED', 'FINALIZED') and pr.payout_units > pr.cost_units then 'WON' " +
-        "  when m.status in ('RESOLVED', 'FINALIZED') and pr.payout_units < pr.cost_units then 'LOST' " +
-        "  when m.status = 'VOIDED' then 'VOIDED' " +
-        "  else 'OPEN' " +
-        "end as status, " +
-        "case " +
-        "  when p.outcome = 'YES' and ms.yes_bid is not null and ms.yes_ask is not null then ((ms.yes_bid + ms.yes_ask) / 2)::int " +
-        "  when p.outcome = 'NO' and ms.no_bid is not null and ms.no_ask is not null then ((ms.no_bid + ms.no_ask) / 2)::int " +
+        "  when p.outcome = 'YES' and ms.yes_bid is not null and ms.yes_ask is not null then round((ms.yes_bid + ms.yes_ask) * 50.0 / m.redemption_units)::int " +
+        "  when p.outcome = 'NO' and ms.no_bid is not null and ms.no_ask is not null then round((ms.no_bid + ms.no_ask) * 50.0 / m.redemption_units)::int " +
         "  else null " +
         "end as chance_pct " +
         "from positions p " +
         "join markets m on m.id = p.market_id " +
         "left join market_stats ms on ms.market_id = m.id " +
         "left join position_results pr on pr.market_id = p.market_id and pr.account_id = p.account_id " +
-        "where p.account_id = $1::uuid and (p.total_shares > 0 or pr.id is not null) " +
+        "and pr.season_id = p.season_id and pr.outcome = p.outcome " +
+        "where p.account_id = $1::uuid and (p.qty > 0 or pr.id is not null) " +
         "order by p.updated_at desc limit 50";
 
     let r: result[[ProfileCallDbRow], str] = zokor.query_all(s.conn, q, [pg.arg_text(account_id)], pr_dl());

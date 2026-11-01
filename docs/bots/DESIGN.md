@@ -429,12 +429,13 @@ create index bot_decisions_lookup_idx on bot_decisions (bot_id, market_id, at de
   "given_to_players": 3180000,
   "bot_budget": {
     "allocated": 502000,
-    "cap": 750000
+    "cap": null
   },
   "collateral_held": 1420500,
   "fees_collected": 34200,
   "season_grants_next": {
     "at": "2026-11-01T00:00:00Z",
+    "amount": 1000,
     "approx_players": 3180,
     "approx_total": 3180000,
     "approval_id": "appr_019283",
@@ -444,6 +445,16 @@ create index bot_decisions_lookup_idx on bot_decisions (bot_id, market_id, at de
   "incident_banner": null
 }
 ```
+
+Figures cover one season (`season` id, else the active season; none →
+`503`). `given_to_players` sums `issuance_grants`; `bot_budget.allocated` sums
+`bot_markets.allocated`; `cap` is `null` while no season cap is recorded;
+`collateral_held` is issued pairs × payout over live markets;
+`fees_collected` is the `system:fees` wallet. `books_balanced` is the latest
+finished reconciliation (`null` before the first); `incident_banner` is the
+trading-halt reason. `season_grants_next` describes a `PROPOSED` issuance
+policy (`at` is the next scheduled season's start, `""` if none). A failed
+read fails the request rather than reporting zero.
 
 #### 2. Bot Table Overview
 - **Endpoint**: `GET /v1/admin/bots`

@@ -9,8 +9,10 @@ import "../service" as standings_svc;
 pub fn mount(r: zokor.Router[app.App]) -> int {
     register_errors(r.errors);
 
-    r.get("/v1/leaderboard", get_leaderboard_handler);
-    r.get("/v1/leaderboard/strip", get_strip_handler);
+    let board = r.group("/v1/leaderboard");
+    board.before(auth.optional_session);
+    board.get("", get_leaderboard_handler);
+    board.get("/strip", get_strip_handler);
 
     return 0;
 }

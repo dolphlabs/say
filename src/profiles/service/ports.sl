@@ -7,7 +7,8 @@ pub gc struct AccountLookup {
     username: str,
     avatar_color: str,
     status: str,
-    created_at_ms: int
+    created_at_ms: int,
+    joined_season: str
 }
 
 pub gc struct ProfileStore[C] {

@@ -7,7 +7,7 @@ pub fn test_treasury_summary() {
     guard let sum = res else { panic("get_summary failed"); }
     assert(sum.given_to_players == 1000000);
     assert(sum.bot_budget.allocated == 50000);
-    assert(sum.bot_budget.cap == 100000);
+    assert((sum.bot_budget.cap ?? 0) == 100000);
     assert(f.calls[0] == "summary season_1");
 }
 

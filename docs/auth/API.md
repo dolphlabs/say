@@ -73,6 +73,11 @@ Returned by verify, login, Google complete and `GET /v1/me`.
 `username_changeable_at`: a username is fixed until the end of the season
 it was set in.
 
+`GET /v1/me` also returns `roles`: the caller's staff roles (`creator`,
+`curator`, `treasury`, `resolver`, `admin`, `super_admin`, ...), `[]` for a
+player. The app uses it to show the admin console; every admin route still
+checks the role on the server.
+
 ## Endpoints
 
 ### Username (signup step 1)

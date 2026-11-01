@@ -36,22 +36,22 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     adm.before(auth.require_session);
 
     adm.get("/resolutions", get_queue_handler);
-    adm.get("/resolutions/{market_id}", get_resolution_detail_handler);
-    adm.post("/resolutions/{market_id}/evidence", post_evidence_handler);
-    adm.post("/resolutions/{market_id}/evidence/refresh", post_refresh_evidence_handler);
-    adm.post("/resolutions/{market_id}/propose", post_propose_handler);
-    adm.post("/resolutions/{market_id}/hold", post_hold_handler);
-    adm.post("/resolutions/{market_id}/disputes/{id}/decide", post_decide_dispute_handler);
-    adm.post("/resolutions/{market_id}/finalize", post_finalize_handler);
-    adm.get("/settlements/{market_id}", get_settlement_progress_handler);
+    adm.get("/resolutions/:market_id", get_resolution_detail_handler);
+    adm.post("/resolutions/:market_id/evidence", post_evidence_handler);
+    adm.post("/resolutions/:market_id/evidence/refresh", post_refresh_evidence_handler);
+    adm.post("/resolutions/:market_id/propose", post_propose_handler);
+    adm.post("/resolutions/:market_id/hold", post_hold_handler);
+    adm.post("/resolutions/:market_id/disputes/:id/decide", post_decide_dispute_handler);
+    adm.post("/resolutions/:market_id/finalize", post_finalize_handler);
+    adm.get("/settlements/:market_id", get_settlement_progress_handler);
 
     // Public resolution routes
-    r.get("/v1/markets/{market_id}/resolution", get_public_resolution_handler);
+    r.get("/v1/markets/:market_id/resolution", get_public_resolution_handler);
 
     // Public dispute route (authenticated)
     let mkt_user = r.group("/v1/markets");
     mkt_user.before(auth.require_session);
-    mkt_user.post("/{market_id}/disputes", post_dispute_handler);
+    mkt_user.post("/:market_id/disputes", post_dispute_handler);
 
     return 0;
 }
@@ -70,7 +70,15 @@ fn get_actor(c: zokor.Ctx[app.App]) -> res_svc.Actor {
     return res_svc.Actor { id: account_id, roles: roles };
 }
 
+fn can_review(actor: res_svc.Actor) -> bool {
+    for role in actor.roles {
+        if role == "resolver" || role == "super_admin" { return true; }
+    }
+    return false;
+}
+
 fn get_queue_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    if !can_review(get_actor(c)) { return zokor.respond(c.errors, "FORBIDDEN", c.request_id); }
     let state_filter = c.query("state");
     let qr = res_svc.get_queue(c.state.resolution, state_filter);
     guard let items = qr else let e = err_of(qr) {
@@ -93,6 +101,7 @@ fn get_queue_handler(c: zokor.Ctx[app.App]) -> http.Response {
 }
 
 fn get_resolution_detail_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    if !can_review(get_actor(c)) { return zokor.respond(c.errors, "FORBIDDEN", c.request_id); }
     let market_id = c.param("market_id");
     let dr = res_svc.get_resolution_detail(c.state.resolution, market_id);
     guard let d = dr else let e = err_of(dr) {
@@ -272,6 +281,7 @@ fn post_finalize_handler(c: zokor.Ctx[app.App]) -> http.Response {
 }
 
 fn get_settlement_progress_handler(c: zokor.Ctx[app.App]) -> http.Response {
+    if !can_review(get_actor(c)) { return zokor.respond(c.errors, "FORBIDDEN", c.request_id); }
     let market_id = c.param("market_id");
     let r = res_svc.get_settlement_progress(c.state.resolution, market_id);
     guard let sp = r else let e = err_of(r) {

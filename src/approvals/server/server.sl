@@ -39,8 +39,19 @@ fn check_totp_recent(c: zokor.Ctx[app.App], account_id: str) -> bool {
     return auth.has_recent_totp(c, account_id);
 }
 
+fn caller_roles(c: zokor.Ctx[app.App], account_id: str) -> [str] {
+    let roles: [str] = [];
+    for role in ["creator", "curator", "treasury", "resolver", "analyst", "admin", "settler", "super_admin"] {
+        let found = app.has_role(c.state, account_id, role);
+        if let allowed = found { if allowed { push(roles, role); } }
+    }
+    return roles;
+}
+
 fn list_approvals_handler(c: zokor.Ctx[app.App]) -> http.Response {
     let account_id = c.local("account_id");
+    let roles = caller_roles(c, account_id);
+    if len(roles) == 0 { return zokor.respond(c.errors, "approvals.forbidden", c.request_id); }
     let status_filter = c.query("status");
     let kind_filter = c.query("kind");
 
@@ -55,6 +66,14 @@ fn list_approvals_handler(c: zokor.Ctx[app.App]) -> http.Response {
         let is_requester = (it.requester_account_id == account_id);
         let can_decide = it.can_decide;
         let reason = it.cannot_decide_reason;
+        if it.status != "pending" {
+            can_decide = false;
+            reason = "This request is no longer pending.";
+        }
+        if !domain.allowed_role(it.kind, roles) {
+            can_decide = false;
+            reason = "Your role cannot decide this request.";
+        }
         if is_requester {
             can_decide = false;
             reason = "You asked for this, so someone else has to approve it.";
@@ -103,6 +122,10 @@ fn approve_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "approvals.not_found", c.request_id);
     }
 
+    if !domain.allowed_role(req.kind, caller_roles(c, account_id)) {
+        return zokor.respond(c.errors, "approvals.forbidden", c.request_id);
+    }
+
     if req.requested_by == account_id {
         return zokor.respond(c.errors, "approvals.self_approval", c.request_id);
     }
@@ -111,7 +134,7 @@ fn approve_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "approvals.stale", c.request_id);
     }
 
-    let now_ms = (time.mono() / 1000000) as int;
+    let now_ms = (time.wall() / 1000000) as int;
     let note = "";
     if let n = body.note { note = n; }
 
@@ -150,6 +173,10 @@ fn reject_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "approvals.not_found", c.request_id);
     }
 
+    if !domain.allowed_role(req.kind, caller_roles(c, account_id)) {
+        return zokor.respond(c.errors, "approvals.forbidden", c.request_id);
+    }
+
     if req.requested_by == account_id {
         return zokor.respond(c.errors, "approvals.self_approval", c.request_id);
     }
@@ -158,7 +185,7 @@ fn reject_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "approvals.stale", c.request_id);
     }
 
-    let now_ms = (time.mono() / 1000000) as int;
+    let now_ms = (time.wall() / 1000000) as int;
     let reason = "";
     if let r = body.reason { reason = r; }
 

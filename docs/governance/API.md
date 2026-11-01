@@ -9,7 +9,7 @@ This document covers all endpoints introduced in **Prompt 10** for season standi
 ### `GET /v1/leaderboard`
 Returns the current season leaderboard, including the season progress header, top-3 podium, ranked list, and the caller's personal standing card if authenticated.
 
-- **Auth**: Optional session (`auth.require_session` not required, but caller `account_id` evaluated if present)
+- **Auth**: Optional session via `auth.optional_session`: a valid session adds `me`; a missing, expired or unreadable one serves the anonymous board
 - **Query Parameters**:
   - `sort`: `profit` (default), `win_rate`, `calls`
   - `limit`: `1..100` (default: `50`)
@@ -109,6 +109,10 @@ Public user profile with strict privacy guarantees.
     ]
   }
   ```
+  `joined_season` is the season the account was created in (`""` before the
+  first season). `avatar_color` is derived from the account id.
+  `calls[].status` is `OPEN`, `WON`, `LOST` or `VOIDED`; `chance_pct` is the
+  mid price as a percentage of the payout.
 - **Privacy Guarantees**:
   - **NEVER EXPOSED**: email, Sedis balance, held funds, share count, order IDs, fill prices, or trade logs.
   - Active positions only expose the market question, slug, chosen side (`YES`/`NO`), status, and current market chance percentage.

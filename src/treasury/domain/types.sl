@@ -1,5 +1,6 @@
 pub gc struct SeasonGrantsInfo {
     at: str,
+    amount: int,
     approx_players: int,
     approx_total: int,
     approval_id: str,
@@ -8,7 +9,7 @@ pub gc struct SeasonGrantsInfo {
 
 pub gc struct BotBudgetInfo {
     allocated: int,
-    cap: int
+    cap: opt[int]
 }
 
 pub gc struct TreasurySummary {
@@ -17,7 +18,7 @@ pub gc struct TreasurySummary {
     collateral_held: int,
     fees_collected: int,
     season_grants_next: opt[SeasonGrantsInfo],
-    books_balanced: bool,
+    books_balanced: opt[bool],
     incident_banner: opt[str]
 }
 

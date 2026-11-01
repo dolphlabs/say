@@ -52,7 +52,11 @@ pub fn summary_json(s: domain.TreasurySummary) -> zokor.Json {
 
     let b_obj = zokor.jobj();
     b_obj.set_int("allocated", s.bot_budget.allocated);
-    b_obj.set_int("cap", s.bot_budget.cap);
+    if let cap = s.bot_budget.cap {
+        b_obj.set_int("cap", cap);
+    } else {
+        b_obj.set("cap", zokor.jnull());
+    }
     j.set("bot_budget", b_obj);
 
     j.set_int("collateral_held", s.collateral_held);
@@ -61,6 +65,7 @@ pub fn summary_json(s: domain.TreasurySummary) -> zokor.Json {
     if let g = s.season_grants_next {
         let g_obj = zokor.jobj();
         g_obj.set_str("at", g.at);
+        g_obj.set_int("amount", g.amount);
         g_obj.set_int("approx_players", g.approx_players);
         g_obj.set_int("approx_total", g.approx_total);
         g_obj.set_str("approval_id", g.approval_id);
@@ -70,7 +75,11 @@ pub fn summary_json(s: domain.TreasurySummary) -> zokor.Json {
         j.set("season_grants_next", zokor.jnull());
     }
 
-    j.set_bool("books_balanced", s.books_balanced);
+    if let balanced = s.books_balanced {
+        j.set_bool("books_balanced", balanced);
+    } else {
+        j.set("books_balanced", zokor.jnull());
+    }
     if let b = s.incident_banner {
         j.set_str("incident_banner", b);
     } else {

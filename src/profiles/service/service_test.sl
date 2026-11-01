@@ -13,7 +13,8 @@ fn fake_find_user(ctx: FakeStoreContext, raw_username: str) -> result[AccountLoo
             username: "kemi.calls",
             avatar_color: "#e91e63",
             status: "ACTIVE",
-            created_at_ms: 1000
+            created_at_ms: 1000,
+            joined_season: "Season 02"
         });
     }
     return ok(AccountLookup {
@@ -23,7 +24,8 @@ fn fake_find_user(ctx: FakeStoreContext, raw_username: str) -> result[AccountLoo
         username: "",
         avatar_color: "",
         status: "",
-        created_at_ms: 0
+        created_at_ms: 0,
+        joined_season: ""
     });
 }
 
@@ -58,6 +60,8 @@ fn test_profile_service_caching_and_lookup() {
     guard let prof = outcome.profile else { panic("expected profile"); }
     assert(prof.username == "kemi.calls");
     assert(prof.current_season.rank == 38);
+    assert(prof.joined_season == "Season 02", prof.joined_season);
+    assert(prof.share_url == "https://say.it/u/kemi.calls", prof.share_url);
 
     // From cache
     let cached_res = get_profile(svc, "kemi.calls", "https://say.it", 2000);

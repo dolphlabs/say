@@ -81,7 +81,8 @@ pub fn activate_totp(s: Store, account_id: str, encrypted_secret: str, step: int
     let _del = pg.pool_query(s.pg, "delete from pending_totp where account_id = $1::uuid", [pg.arg_text(account_id)], pg_until());
 
     let q_proof = "insert into session_totp_proofs(session_id, account_id, verified_at) values($1, $2::uuid, now()) on conflict (session_id) do update set verified_at = now()";
-    let _prf = pg.pool_query(s.pg, q_proof, [pg.arg_text(session_id), pg.arg_text(account_id)], pg_until());
+    let proof = pg.pool_query(s.pg, q_proof, [pg.arg_text(session_id), pg.arg_text(account_id)], pg_until());
+    guard let _saved = proof else let e = err_of(proof) { return err(e); }
     return ok(true);
 }
 
@@ -106,7 +107,8 @@ pub fn record_totp_step_up(s: Store, account_id: str, step: int, session_id: str
     guard let _ok = r else let e = err_of(r) { return err(e); }
 
     let q_proof = "insert into session_totp_proofs(session_id, account_id, verified_at) values($1, $2::uuid, now()) on conflict (session_id) do update set verified_at = now()";
-    let _prf = pg.pool_query(s.pg, q_proof, [pg.arg_text(session_id), pg.arg_text(account_id)], pg_until());
+    let proof = pg.pool_query(s.pg, q_proof, [pg.arg_text(session_id), pg.arg_text(account_id)], pg_until());
+    guard let _saved = proof else let e = err_of(proof) { return err(e); }
     return ok(true);
 }
 

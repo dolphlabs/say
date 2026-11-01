@@ -46,6 +46,14 @@ fn halt_key() -> str {
     return "say:trading_halted";
 }
 
+pub fn set_bots_paused(c: pg.Conn, paused: bool, d: until) -> result[bool, str] {
+    let r = pg.query(c, "update trading_halt set bots_paused = $1 where id = 1",
+        [pg.arg_bool(paused)], d);
+    guard let changed = r else let e = err_of(r) { return err(e); }
+    if changed.affected != 1 { return err("trading_halt row missing"); }
+    return ok(true);
+}
+
 fn mirror_halt(p: Postgres, halted: bool) {
     guard let pool = p.redis else {
         return;

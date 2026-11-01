@@ -42,13 +42,13 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 2.2 File a Dispute
-- **Endpoint**: `POST /v1/markets/:market_id/dispute`
+- **Endpoint**: `POST /v1/markets/:market_id/disputes`
 - **Auth**: Authenticated Player (`say_session` cookie)
 - **Rules**:
   - Account must hold or have held a position in the market.
   - Account may file at most 1 dispute per market.
   - Can only file while state is `PROPOSED` and dispute window is open (`now() < dispute_until`).
-  - Reason must be between 20 and 1,000 characters.
+  - Reason must be between 20 and 500 characters.
 - **Request Body**:
 ```json
 {
@@ -63,7 +63,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 }
 ```
 - **Error Codes**:
-  - `400 INVALID_REASON_LENGTH`: Reason shorter than 20 chars or longer than 1,000 chars.
+  - `400 INVALID_REASON_LENGTH`: Reason shorter than 20 chars or longer than 500 chars.
   - `400 ALREADY_DISPUTED`: Account already submitted a dispute for this market.
   - `403 NOT_ELIGIBLE_TO_DISPUTE`: Account never held shares or contracts in this market.
   - `400 WINDOW_OPEN`: Dispute window closed.
@@ -74,7 +74,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ## 3. Admin & Resolver Endpoints
 
 ### 3.1 Resolution Queue
-- **Endpoint**: `GET /v1/admin/resolution/queue?state={COLLECTING|PROPOSED|AWAITING_FINAL|HELD|OVERDUE}`
+- **Endpoint**: `GET /v1/admin/resolutions?state={COLLECTING|PROPOSED|AWAITING_FINAL|HELD|OVERDUE}`
 - **Auth**: `resolver` or `super_admin`
 - **Response**: `200 OK`
 ```json
@@ -93,7 +93,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.2 Resolution Market Detail & Audit
-- **Endpoint**: `GET /v1/admin/resolution/markets/:market_id`
+- **Endpoint**: `GET /v1/admin/resolutions/:market_id`
 - **Auth**: `resolver` or `super_admin`
 - **Response**: `200 OK`
 ```json
@@ -152,7 +152,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.3 Add Manual Evidence
-- **Endpoint**: `POST /v1/admin/resolution/markets/:market_id/evidence`
+- **Endpoint**: `POST /v1/admin/resolutions/:market_id/evidence`
 - **Auth**: `resolver` or `super_admin`
 - **Request Body**:
 ```json
@@ -169,7 +169,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.4 Refresh Evidence (Automated Adapters)
-- **Endpoint**: `POST /v1/admin/resolution/markets/:market_id/refresh-evidence`
+- **Endpoint**: `POST /v1/admin/resolutions/:market_id/evidence/refresh`
 - **Auth**: `resolver` or `super_admin`
 - **Response**: `200 OK`
 ```json
@@ -179,7 +179,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.5 Propose Outcome
-- **Endpoint**: `POST /v1/admin/resolution/markets/:market_id/propose`
+- **Endpoint**: `POST /v1/admin/resolutions/:market_id/propose`
 - **Auth**: `resolver` or `super_admin`
 - **Rules**:
   - Requires at least 1 piece of supporting evidence.
@@ -202,7 +202,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.6 Hold Resolution
-- **Endpoint**: `POST /v1/admin/resolution/markets/:market_id/hold`
+- **Endpoint**: `POST /v1/admin/resolutions/:market_id/hold`
 - **Auth**: `resolver` or `super_admin`
 - **Request Body**:
 ```json
@@ -219,12 +219,12 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.7 Decide Dispute
-- **Endpoint**: `POST /v1/admin/resolution/markets/:market_id/disputes/:id/decide`
+- **Endpoint**: `POST /v1/admin/resolutions/:market_id/disputes/:id/decide`
 - **Auth**: `super_admin` strictly
 - **Request Body**:
 ```json
 {
-  "decision": "DISMISSED",
+  "decision": "REJECT",
   "note": "VAR review occurred prior to final whistle; score 2-1 stands."
 }
 ```
@@ -236,7 +236,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.8 Finalize Resolution
-- **Endpoint**: `POST /v1/admin/resolution/markets/:market_id/finalize`
+- **Endpoint**: `POST /v1/admin/resolutions/:market_id/finalize`
 - **Auth**: `super_admin` strictly
 - **Rules**:
   - `finalizer_id != proposer_id` (a user cannot finalize their own proposal).
@@ -264,7 +264,7 @@ This document details the HTTP API for Prompt 08: **Resolution and Settlement** 
 ```
 
 ### 3.9 Settlement Progress
-- **Endpoint**: `GET /v1/admin/resolution/markets/:market_id/settlement-progress`
+- **Endpoint**: `GET /v1/admin/settlements/:market_id`
 - **Auth**: `resolver` or `super_admin`
 - **Response**: `200 OK`
 ```json

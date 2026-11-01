@@ -37,3 +37,14 @@ fn test_dto_structures() {
     };
     assert(len(disp_dto.reason) > 20);
 }
+
+fn test_resolution_reads_require_resolver_or_super_admin() {
+    let player = res_svc.Actor { id: "player", roles: [] };
+    let treasury = res_svc.Actor { id: "treasury", roles: ["treasury"] };
+    let resolver = res_svc.Actor { id: "resolver", roles: ["resolver"] };
+    let super_admin = res_svc.Actor { id: "super", roles: ["super_admin"] };
+    assert(!can_review(player));
+    assert(!can_review(treasury));
+    assert(can_review(resolver));
+    assert(can_review(super_admin));
+}
