@@ -30,8 +30,8 @@ fn test_should_render_verify_and_reset_mail_by_purpose() {
     guard let _b = b else { panic("reset mail"); }
     let sent = email.sent_messages(mem);
     assert(len(sent) == 2);
-    assert(sent[0].subject == "Your say code");
-    assert(sent[1].subject == "Reset your say password");
+    assert(sent[0].subject == "Finish signing up for say");
+    assert(sent[1].subject == "Your code to get back into say");
 }
 
 fn test_should_make_distinct_v4_uuids() {

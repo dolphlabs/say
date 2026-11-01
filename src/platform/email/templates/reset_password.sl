@@ -1,19 +1,19 @@
 pub fn reset_password_html(username: str, code: str) -> str {
     return code_email_html(
-        "Reset your say password",
-        "Reset your password",
+        "Your code to get back into say",
+        "Get back into say",
         username,
-        "Enter this code to choose a new password.",
+        "You asked to get back into say. Type this code into the page you just left, then choose new sign-in details.",
         code,
-        "If you did not ask to reset your password, you can ignore this email and your password stays the same. Never share this code with anyone."
+        "If you didn't ask for this, ignore this email. Nothing changes without the code."
     );
 }
 
 pub fn reset_password_text(username: str, code: str) -> str {
     return "Hi " + username + ",\n\n" +
-        "Your password reset code is:\n\n" +
+        "You asked to get back into say. Your code is:\n\n" +
         code + "\n\n" +
-        "This code expires in 10 minutes.\n\n" +
-        "If you did not request this, please disregard this email.\n\n" +
-        "-- Say Exchange";
+        "This code expires in 10 minutes. Type it into the page you just left, then choose new sign-in details.\n\n" +
+        "If you didn't ask for this, ignore this email. Nothing changes without the code.\n\n" +
+        "-- say, the free prediction game";
 }

@@ -91,11 +91,11 @@ pub fn new_uuid() -> str {
 }
 
 fn send_mail(p: Postman, m: accounts.Mail) -> result[bool, str] {
-    let subject = "Your say code";
+    let subject = "Finish signing up for say";
     let html = templates.verify_email_html(m.username, m.code);
     let text = templates.verify_email_text(m.username, m.code);
     if m.purpose == "reset_password" {
-        subject = "Reset your say password";
+        subject = "Your code to get back into say";
         html = templates.reset_password_html(m.username, m.code);
         text = templates.reset_password_text(m.username, m.code);
     }

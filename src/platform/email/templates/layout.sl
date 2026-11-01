@@ -18,7 +18,7 @@ fn code_email_html(title: str, heading: str, username: str, intro: str, code: st
         "<div style=\"background-color: #f4f4f5; border-radius: 8px; padding: 20px; text-align: center; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 32px; font-weight: 600; letter-spacing: 8px; color: #18181b;\">" + code + "</div>" +
         "</td></tr>" +
         "<tr><td style=\"padding-bottom: 32px; font-size: 14px; line-height: 22px; color: #52525b;\">This code expires in 10 minutes. " + footnote + "</td></tr>" +
-        "<tr><td style=\"border-top: 1px solid #e4e4e7; padding-top: 16px; font-size: 12px; line-height: 18px; color: #a1a1aa;\">Say Exchange</td></tr>" +
+        "<tr><td style=\"border-top: 1px solid #e4e4e7; padding-top: 16px; font-size: 12px; line-height: 18px; color: #a1a1aa;\">say · a free prediction game. Sedis are play credits with no cash value.</td></tr>" +
         "</table>" +
         "</td></tr>" +
         "</table>" +
