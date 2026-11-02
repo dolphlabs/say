@@ -29,7 +29,7 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     seasons.get("",season_choices);
     let sources=r.group("/v1/admin/resolution-sources");
     sources.before(auth.require_session);
-    sources.get("",source_list); sources.post("",source_create);
+    sources.get("",source_list); sources.post("",source_create); sources.post("/:id/approve",source_approve);
     // zokor:public
     r.get("/v1/categories",categories);
     r.get("/v1/markets",public_list);

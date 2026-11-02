@@ -5,7 +5,7 @@ TEST_DATABASE_URL ?= postgres://say:say-test-only@127.0.0.1:55432/say_test?sslmo
 TEST_APP_DATABASE_URL ?= postgresql://say_api:say-api-test-only@127.0.0.1:55432/say_test?sslmode=disable
 TEST_REDIS_URL ?= redis://127.0.0.1:56379
 
-.PHONY: test test-stream test-integration test-stack build run check load migrate
+.PHONY: test test-stream test-integration test-stack build run check load migrate seed
 
 # Every package with tests, found rather than listed, so a new one is
 # never left out. Without TEST_DATABASE_URL/TEST_REDIS_URL the Postgres
@@ -44,6 +44,10 @@ run: build
 # unrelated endpoint; see loadtest/README.md.
 load:
 	sh loadtest/run.sh
+
+# Sample markets through the admin API; see tools/seed/README.md.
+seed:
+	node tools/seed/seed-markets.mjs
 
 # The layering, SQL, config and auth rules in AGENTS.md, then tests.
 check:

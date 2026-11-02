@@ -191,3 +191,23 @@ fn test_parallel_edits_and_approvals_have_one_winner() {
     assert(number(r.owner,"select count(*)::bigint as value from approval_decisions d join approval_requests a on a.id=d.approval_id where a.subject_id=$1::uuid",[pg.arg_text(id)])==1);
     close(r);
 }
+
+fn test_should_approve_a_resolution_source_only_by_someone_other_than_its_creator() {
+    guard let r=rig() else { return; }
+    let cr=source_create(r.store,r.curator,"Proposed capture","https://example.test/proposed","html",2000);
+    guard let created=cr else let f=err_of(cr) { panic(f.code+f.detail); }
+    let self_=source_approve(r.store,r.curator,created.id,2000);
+    if let _s=self_ { panic("creator approved own source"); } else let f=err_of(self_) { assert(f.code=="SELF_APPROVAL_FORBIDDEN",f.code); }
+    let creator=source_approve(r.store,r.author,created.id,2000);
+    if let _s=creator { panic("creator role approved a source"); } else let f=err_of(creator) { assert(f.code=="FORBIDDEN_ROLE",f.code); }
+    let missing=source_approve(r.store,r.other,"44444444-4444-4444-a444-444444444444",2000);
+    if let _s=missing { panic("approved a missing source"); } else let f=err_of(missing) { assert(f.code=="NOT_FOUND",f.code); }
+    let ok_=source_approve(r.store,r.other,created.id,2000);
+    guard let approved=ok_ else let f=err_of(ok_) { panic(f.code+f.detail); }
+    assert(approved.approved);
+    let again=source_approve(r.store,r.other,created.id,3000);
+    guard let _again=again else let f=err_of(again) { panic(f.code+f.detail); }
+    assert(text(r.owner,"select approved_by::text as value from resolution_sources where id=$1::uuid",[pg.arg_text(created.id)])==r.other);
+    assert(number(r.owner,"select count(*)::bigint as value from audit_events where action='resolution_source.approved'",[])==1);
+    close(r);
+}

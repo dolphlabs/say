@@ -88,3 +88,9 @@ fn source_create(c: zokor.Ctx[app.App]) -> http.Response {
     guard let source=r else let f=err_of(r) { return failure(c,f); }
     return zokor.created(zokor.jobj().set_str("id",source.id).set_str("name",source.name).set_bool("approved",false).render(),"/v1/admin/resolution-sources/"+source.id);
 }
+
+fn source_approve(c: zokor.Ctx[app.App]) -> http.Response {
+    let r=markets.approve_source(c.state.markets,c.local("account_id"),c.param("id"));
+    guard let source=r else let f=err_of(r) { return failure(c,f); }
+    return zokor.no_store(zokor.ok_json(zokor.jobj().set_str("id",source.id).set_str("name",source.name).set_bool("approved",source.approved).render()));
+}

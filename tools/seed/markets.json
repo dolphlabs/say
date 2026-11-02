@@ -1,0 +1,63 @@
+{
+  "source": {
+    "name": "Say editorial desk",
+    "url_pattern": "https://say.dolphlabs.com/resolution",
+    "kind": "html"
+  },
+  "markets": [
+    {
+      "question": "Will Remo Stars win their next NPFL match?",
+      "category": "Football",
+      "close_in_days": 3,
+      "opening_price": 55,
+      "yes_if": "Remo Stars are declared winners of their next scheduled NPFL league match after 90 minutes plus stoppage time.",
+      "no_if": "Remo Stars draw or lose their next scheduled NPFL league match, as shown in the official NPFL result.",
+      "edge_cases": "If the match is postponed past the close time or abandoned without a result, the market is voided."
+    },
+    {
+      "question": "Will Super Eagles score two or more goals in their next match?",
+      "category": "Football",
+      "close_in_days": 5,
+      "opening_price": 40,
+      "yes_if": "Nigeria's senior men's team scores two or more goals in regulation time of their next official match.",
+      "no_if": "Nigeria scores fewer than two goals in regulation time of their next official match.",
+      "edge_cases": "Extra time and penalty shootouts do not count. A match not played before close voids the market."
+    },
+    {
+      "question": "Will a Nigerian song top the Apple Music Nigeria chart this Friday?",
+      "category": "Music",
+      "close_in_days": 4,
+      "opening_price": 80,
+      "yes_if": "The number one song on the Apple Music Top 100: Nigeria chart on Friday at 12:00 WAT is by a Nigerian lead artist.",
+      "no_if": "The number one song on that chart at that time is by a lead artist who is not Nigerian.",
+      "edge_cases": "Featured artists do not count; only the lead credited artist. If the chart is unavailable, it is voided."
+    },
+    {
+      "question": "Will Lagos record rainfall on Saturday?",
+      "category": "Weather",
+      "close_in_days": 2,
+      "opening_price": 60,
+      "yes_if": "NiMet or a major weather service reports measurable rainfall (0.1 mm or more) in Lagos on Saturday, WAT.",
+      "no_if": "No measurable rainfall is reported for Lagos on Saturday, WAT, by those sources.",
+      "edge_cases": "Rain anywhere in Lagos State counts. If no source reports by resolve time, the market is voided."
+    },
+    {
+      "question": "Will a Nigerian startup announce a funding round of $10M or more this week?",
+      "category": "Tech",
+      "close_in_days": 6,
+      "opening_price": 35,
+      "yes_if": "A Nigeria-headquartered startup publicly announces a single equity or debt round of at least US$10 million before close.",
+      "no_if": "No such announcement is made by a Nigeria-headquartered startup before the market closes.",
+      "edge_cases": "Acquisitions and grants do not count. Announcements are judged by the date of first public report."
+    },
+    {
+      "question": "Will a Nollywood film be the top Netflix Nigeria movie on Sunday?",
+      "category": "Culture",
+      "close_in_days": 5,
+      "opening_price": 65,
+      "yes_if": "The number one film on Netflix's Top 10 Movies in Nigeria list on Sunday is a Nigerian production.",
+      "no_if": "The number one film on that list on Sunday is not a Nigerian production.",
+      "edge_cases": "Series do not count. If the Top 10 list is not published for Sunday, the market is voided."
+    }
+  ]
+}

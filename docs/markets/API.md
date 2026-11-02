@@ -31,6 +31,7 @@ markets. No caller can approve their own submission, including super_admin.
 | POST /v1/admin/markets/validate | Dry-run fields;200 {valid,errors:[{code,field,message}]} |
 | GET /v1/admin/resolution-sources | Curated source definitions/approved flags |
 | POST /v1/admin/resolution-sources | Curator/super_admin;name,url_pattern,kind(html/json); always created unapproved |
+| POST /v1/admin/resolution-sources/{id}/approve | Curator/super_admin other than the creator (403 SELF_APPROVAL_FORBIDDEN); idempotent; 200 {id,name,approved} |
 
 Create/edit fields: question,category_id,season_id,resolution_source_id,
 rules{yes_if,no_if,edge_cases},open_at,close_at,resolve_by,redemption_units,
