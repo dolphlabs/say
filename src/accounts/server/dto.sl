@@ -51,6 +51,12 @@ gc struct ChangePasswordDto {
     new_password: str
 }
 
+gc struct SetAvatarDto {
+    public_id: str,
+    version: str,
+    signature: str
+}
+
 gc struct ChangeUsernameDto {
     username: str,
     hold_id: str
@@ -89,7 +95,8 @@ fn user_json(a: domain.Account, changeable_at: timez.Time) -> zokor.Json {
         .set_bool("has_password", a.has_password)
         .set_bool("google_linked", a.google_linked)
         .set_str("username_changeable_at", changeable_at.rfc3339())
-        .set_str("created_at", a.created_at.rfc3339());
+        .set_str("created_at", a.created_at.rfc3339())
+        .set_opt_str("avatar_url", a.avatar_url);
 }
 
 fn grant_json(g: opt[ledger.Grant]) -> zokor.Json {

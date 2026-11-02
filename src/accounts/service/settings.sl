@@ -239,3 +239,30 @@ pub fn anonymise_account[C](a: Auth[C], account_id: str) -> result[[bytes], str]
     let f = st.anonymise_account;
     return f(st.context, account_id, anon_user, anon_email);
 }
+
+pub fn avatar_keys(cloud_name: str, api_key: str, api_secret: str) -> domain.AvatarKeys {
+    return domain.AvatarKeys { cloud_name: cloud_name, api_key: api_key, api_secret: api_secret };
+}
+
+pub fn avatar_upload[C](a: Auth[C], account_id: str, now_seconds: int) -> result[domain.AvatarUpload, str] {
+    if !domain.avatars_enabled(a.cfg.avatars) { return err("AVATARS_DISABLED"); }
+    return ok(domain.avatar_upload(a.cfg.avatars, account_id, now_seconds));
+}
+
+pub fn set_avatar[C](a: Auth[C], account_id: str, public_id: str, version: str, signature: str) -> result[str, str] {
+    if !domain.avatars_enabled(a.cfg.avatars) { return err("AVATARS_DISABLED"); }
+    if !domain.upload_response_valid(a.cfg.avatars, account_id, public_id, version, signature) { return err("AVATAR_INVALID"); }
+    let st_r = get_settings_store(a);
+    guard let st = st_r else let e = err_of(st_r) { return err(e); }
+    let url = domain.avatar_url(a.cfg.avatars, account_id, version);
+    let r = (st.set_avatar_url)(st.context, account_id, some(url));
+    guard let _ok = r else let e = err_of(r) { return err(e); }
+    return ok(url);
+}
+
+pub fn remove_avatar[C](a: Auth[C], account_id: str) -> result[bool, str] {
+    let st_r = get_settings_store(a);
+    guard let st = st_r else let e = err_of(st_r) { return err(e); }
+    let none_url: opt[str] = none;
+    return (st.set_avatar_url)(st.context, account_id, none_url);
+}

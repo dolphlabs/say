@@ -42,6 +42,9 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     me.post("/2fa/verify", verify_2fa);
     me.post("/2fa/disable", disable_2fa);
     me.delete("", delete_me);
+    me.post("/avatar/upload", avatar_upload);
+    me.put("/avatar", set_avatar);
+    me.delete("/avatar", remove_avatar);
 
     let adm = r.group("/v1/admin");
     adm.before(auth.require_session);
@@ -577,4 +580,32 @@ fn revoke_role_handler(c: zokor.Ctx[app.App]) -> http.Response {
     }
 
     return zokor.no_content();
+}
+
+fn avatar_upload(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.avatar_upload(c.state.accounts, c.local("account_id"), (time.wall() / 1000000000) as int);
+    guard let u = r else let e = err_of(r) { return avatar_failure(c, e); }
+    let fields = zokor.jobj();
+    for k, v in u.fields { fields.set_str(k, v); }
+    return zokor.no_store(zokor.ok_json(zokor.jobj().set_str("upload_url", u.url).set("fields", fields).render()));
+}
+
+fn set_avatar(c: zokor.Ctx[app.App]) -> http.Response {
+    let dr: result[SetAvatarDto, http.Response] = zokor.dto(c);
+    guard let body = dr else let bad = err_of(dr) { return bad; }
+    let r = accounts.set_avatar(c.state.accounts, c.local("account_id"), body.public_id, body.version, body.signature);
+    guard let url = r else let e = err_of(r) { return avatar_failure(c, e); }
+    return zokor.no_store(zokor.ok_json(zokor.jobj().set_str("avatar_url", url).render()));
+}
+
+fn remove_avatar(c: zokor.Ctx[app.App]) -> http.Response {
+    let r = accounts.remove_avatar(c.state.accounts, c.local("account_id"));
+    guard let _ok = r else let e = err_of(r) { return avatar_failure(c, e); }
+    return zokor.no_content();
+}
+
+fn avatar_failure(c: zokor.Ctx[app.App], e: str) -> http.Response {
+    if e == "AVATARS_DISABLED" || e == "AVATAR_INVALID" { return zokor.respond(c.errors, e, c.request_id); }
+    c.state.settings.server.logger.error("accounts", "avatar: " + e);
+    return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
 }

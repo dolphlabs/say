@@ -6697,6 +6697,152 @@
           }
         }
       }
+    },
+    "/v1/me/avatar/upload": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Start a profile photo upload",
+        "operationId": "startAvatarUpload",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "description": "Returns a signed Cloudinary upload limited to the caller's own slot. The browser posts the fields plus `file` to upload_url.",
+        "responses": {
+          "200": {
+            "description": "Signed upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "upload_url",
+                    "fields"
+                  ],
+                  "properties": {
+                    "upload_url": {
+                      "type": "string"
+                    },
+                    "fields": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED"
+          },
+          "503": {
+            "description": "AVATARS_DISABLED: Cloudinary is not configured."
+          }
+        }
+      }
+    },
+    "/v1/me/avatar": {
+      "put": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Save the uploaded profile photo",
+        "operationId": "setAvatar",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "public_id",
+                  "version",
+                  "signature"
+                ],
+                "properties": {
+                  "public_id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "signature": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "avatar_url"
+                  ],
+                  "properties": {
+                    "avatar_url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AVATAR_INVALID: not a genuine upload to the caller's slot."
+          },
+          "401": {
+            "description": "UNAUTHENTICATED"
+          },
+          "503": {
+            "description": "AVATARS_DISABLED"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Remove the profile photo",
+        "operationId": "removeAvatar",
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "BearerSession": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "description": "UNAUTHENTICATED"
+          }
+        }
+      }
     }
   },
   "components": {

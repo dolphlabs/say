@@ -137,7 +137,8 @@ pub fn auth_config(s: config.Settings, dummy_hash: str) -> accounts.AuthConfig {
         google_client_id: s.auth.google_client_id,
         google_redirect_uri: redirect,
         google_auth_url: s.auth.google_auth_url,
-        dummy_hash: dummy_hash
+        dummy_hash: dummy_hash,
+        avatars: accounts.avatar_keys(s.media.cloudinary_cloud_name, s.media.cloudinary_api_key, s.media.cloudinary_api_secret)
     };
 }
 

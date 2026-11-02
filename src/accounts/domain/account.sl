@@ -10,7 +10,8 @@ pub gc struct Account {
     has_password: bool,
     google_linked: bool,
     username_changeable_at: timez.Time,
-    created_at: timez.Time
+    created_at: timez.Time,
+    avatar_url: opt[str]
 }
 
 pub fn status_unverified() -> str {

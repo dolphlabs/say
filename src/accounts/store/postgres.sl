@@ -85,7 +85,7 @@ fn account_sql() -> str {
            "a.email_verified_at is not null as email_verified, " +
            "exists (select 1 from password_credentials p where p.account_id = a.id) as has_password, " +
            "exists (select 1 from auth_identities i where i.account_id = a.id and i.provider = 'google') as google_linked, " +
-           "a.username_changeable_at, a.created_at from accounts a where a.id = $1";
+           "a.username_changeable_at, a.created_at, a.avatar_url from accounts a where a.id = $1";
 }
 
 fn read_account(c: pg.Conn, id: str, d: until) -> result[domain.Account, str] {

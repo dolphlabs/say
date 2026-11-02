@@ -6,6 +6,7 @@ export type ProfileCall = { market: { slug: string; question: string }; side: st
 export type Profile = {
   username: string
   avatar_color: string
+  avatar_url: string | null
   joined_season: string
   share_url: string
   current_season: { rank: number; of: number; profit: number; calls: number; right: number; settled: number }

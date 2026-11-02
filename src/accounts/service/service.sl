@@ -50,7 +50,8 @@ pub gc struct AuthConfig {
     google_client_id: str,
     google_redirect_uri: str,
     google_auth_url: str,
-    dummy_hash: str
+    dummy_hash: str,
+    avatars: domain.AvatarKeys
 }
 
 pub gc struct Meta {

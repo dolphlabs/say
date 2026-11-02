@@ -167,7 +167,10 @@ step 1. Errors: username codes, `PENDING_EXPIRED`, `GOOGLE_EMAIL_IN_USE`.
 
 | Call | Answer |
 |---|---|
-| `GET /v1/me` | 200 user object |
+| `GET /v1/me` | 200 user object, including `avatar_url` (null without a photo) |
+| `POST /v1/me/avatar/upload` | 200 `{ upload_url, fields }`: a signed Cloudinary upload, pinned to the caller's own slot (`say/avatars/<id>`). Post `fields` plus `file` to `upload_url` from the browser. 503 `AVATARS_DISABLED` without Cloudinary settings |
+| `PUT /v1/me/avatar` `{ "public_id", "version", "signature" }` | 200 `{ avatar_url }`; the three values come from Cloudinary's upload response, and the signature is checked against the API secret. 400 `AVATAR_INVALID` otherwise |
+| `DELETE /v1/me/avatar` | 204; back to the coloured initial |
 | `POST /v1/me/password` `{ "current_password", "new_password" }` | 204; ends every other session. `INVALID_CREDENTIALS`, `WEAK_PASSWORD` |
 | `DELETE /v1/me/google` | 204. `LAST_SIGN_IN_METHOD` without a password |
 | `DELETE /v1/me` | 202; the account is flagged deleted, every session ends, cookie cleared |

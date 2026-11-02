@@ -7,6 +7,7 @@ import "strings";
 import "time";
 import "timez";
 import "zokor";
+import "../domain" as domain;
 import "../service" as service;
 import "../../ledger/store" as ledger_store;
 
@@ -130,7 +131,8 @@ fn config() -> service.AuthConfig {
         google_client_id: "client-1",
         google_redirect_uri: "http://localhost/cb",
         google_auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-        dummy_hash: "stub$dummy"
+        dummy_hash: "stub$dummy",
+        avatars: domain.AvatarKeys { cloud_name: "demo", api_key: "123", api_secret: "secret" }
     };
 }
 
@@ -456,4 +458,30 @@ fn prepare_ledger(pool: pg.Pool) {
         "select 1000, 1000000000000, 'APPROVED', id, now() from op",
         none_args, d);
     guard let _p = pr else let e = err_of(pr) { panic("policy: " + e); }
+}
+
+fn test_should_save_and_clear_a_signed_avatar_and_refuse_a_forged_one() {
+    guard let l = live() else { return; }
+    let base = auth_on(l, false);
+    let a = service.with_settings(base, settings_store(base.store.context));
+    let inbox = new_inbox();
+    let name = "av" + suffix();
+    let s = sign_up(a, inbox, name, "10.7.0.1");
+    let vr = service.verify_signup(a, s.signup_token, code_for(inbox, name + "@it.say"), meta_from("10.7.0.1"));
+    guard let v = vr else let f = err_of(vr) { panic("verify " + inspect(f.why)); }
+    let id = v.account.id;
+    let public_id = "say/avatars/" + id;
+    let good = encoding.hex_encode(crypto.sha1(to_bytes("public_id=" + public_id + "&version=17secret")));
+    let forged = service.set_avatar(a, id, public_id, "17", "0000000000000000000000000000000000000000");
+    if let _u = forged { panic("forged upload accepted"); } else let e = err_of(forged) { assert(e == "AVATAR_INVALID", e); }
+    let r = service.set_avatar(a, id, public_id, "17", good);
+    guard let url = r else let e = err_of(r) { panic(e); }
+    let after = service.account_of(a, id);
+    guard let acc = after else { panic("account"); }
+    assert(inspect(acc.avatar_url) == inspect(some(url)), inspect(acc.avatar_url));
+    let cleared = service.remove_avatar(a, id);
+    guard let _c = cleared else let e = err_of(cleared) { panic(e); }
+    let gone = service.account_of(a, id);
+    guard let acc2 = gone else { panic("account"); }
+    if let _u = acc2.avatar_url { panic("avatar not cleared"); }
 }

@@ -27,6 +27,12 @@ pub gc struct EmailSettings {
     timeout_ns: int
 }
 
+pub gc struct MediaSettings {
+    cloudinary_cloud_name: str,
+    cloudinary_api_key: str,
+    cloudinary_api_secret: str
+}
+
 pub gc struct LedgerSettings {
     season_anchor: timez.Time,
     grant_workers: int,
@@ -73,6 +79,7 @@ pub gc struct Settings {
     timezone: str,
     auth: AuthSettings,
     email: EmailSettings,
+    media: MediaSettings,
     ledger: LedgerSettings,
     markets: MarketSettings,
     exchange: ExchangeSettings
@@ -123,6 +130,14 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
     }
 
     let google_id = zokor.str_or(cfg, "GOOGLE_CLIENT_ID", "");
+    let cloud_name = zokor.str_or(cfg, "CLOUDINARY_CLOUD_NAME", "");
+    let cloud_key = zokor.str_or(cfg, "CLOUDINARY_API_KEY", "");
+    let cloud_secret = zokor.str_or(cfg, "CLOUDINARY_API_SECRET", "");
+    let cloud_any = len(cloud_name) > 0 || len(cloud_key) > 0 || len(cloud_secret) > 0;
+    let cloud_all = len(cloud_name) > 0 && len(cloud_key) > 0 && len(cloud_secret) > 0;
+    if cloud_any && !cloud_all {
+        note(cfg, "CLOUDINARY_API_SECRET", "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET must be set together");
+    }
     let google_secret = zokor.str_or(cfg, "GOOGLE_CLIENT_SECRET", "");
     let google_redirect = zokor.optional_url(cfg, "GOOGLE_REDIRECT_URI", "");
     if len(google_id) > 0 && (len(google_secret) == 0 || len(google_redirect) == 0) {
@@ -221,6 +236,11 @@ pub fn settings_from(cfg: zokor.Config) -> Settings {
             sendbyte_url: zokor.optional_url(cfg, "SENDBYTE_URL", "https://api.sendbyte.africa/v1/emails"),
             from: zokor.str_or(cfg, "EMAIL_FROM", "say <verify@say.exchange>"),
             timeout_ns: zokor.duration_or(cfg, "EMAIL_TIMEOUT", 10000000000)
+        },
+        media: MediaSettings {
+            cloudinary_cloud_name: cloud_name,
+            cloudinary_api_key: cloud_key,
+            cloudinary_api_secret: cloud_secret
         },
         ledger: LedgerSettings {
             season_anchor: anchor,

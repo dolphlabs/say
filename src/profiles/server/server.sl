@@ -54,6 +54,7 @@ fn profile_to_json(p: domain.Profile) -> zokor.Json {
     return zokor.jobj()
         .set_str("username", p.username)
         .set_str("avatar_color", p.avatar_color)
+        .set("avatar_url", opt_url(p.avatar_url))
         .set_str("joined_season", p.joined_season)
         .set_str("share_url", p.share_url)
         .set("current_season", stats_to_json(p.current_season))
@@ -87,4 +88,9 @@ fn get_user_profile_handler(c: zokor.Ctx[app.App]) -> http.Response {
     let body = profile_to_json(prof).render();
     let resp = zokor.ok_json(body);
     return http.with_header(resp, "Cache-Control", "public, max-age=10");
+}
+
+fn opt_url(u: str) -> zokor.Json {
+    if len(u) == 0 { return zokor.jnull(); }
+    return zokor.jstr(u);
 }

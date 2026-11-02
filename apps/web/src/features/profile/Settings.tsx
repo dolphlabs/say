@@ -1,10 +1,10 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { errorMessage, isApiError, post, send } from '../../api'
 import { dateTime } from '../../format'
 import { endSession, isStaff, type User } from '../../session'
-import { Chip, Notice } from '../../ui/kit'
+import { Avatar, Chip, Notice } from '../../ui/kit'
 import { holdUsername, normalizeUsername, USERNAME_PATTERN } from '../auth/api'
 import { usePreferences, type Preference } from './api'
 
@@ -17,6 +17,65 @@ function Row({ label, value, children }: { label: string; value: ReactNode; chil
       </div>
       {children}
     </div>
+  )
+}
+
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024
+
+type UploadTicket = { upload_url: string; fields: Record<string, string> }
+type Uploaded = { public_id: string; version: number | string; signature: string }
+
+export async function uploadPhoto(file: File): Promise<string> {
+  if (!PHOTO_TYPES.includes(file.type)) throw new Error('Use a JPG, PNG or WebP image.')
+  if (file.size > PHOTO_MAX_BYTES) throw new Error('Use an image under 5 MB.')
+  const ticket = await post<UploadTicket>('/v1/me/avatar/upload')
+  const form = new FormData()
+  for (const [key, value] of Object.entries(ticket.fields)) form.append(key, value)
+  form.append('file', file)
+  const res = await fetch(ticket.upload_url, { method: 'POST', body: form })
+  const body = (await res.json().catch(() => null)) as (Uploaded & { error?: { message?: string } }) | null
+  if (!res.ok || !body) throw new Error(body?.error?.message ?? 'The photo could not be uploaded. Try again.')
+  const saved = await send<{ avatar_url: string }>('PUT', '/v1/me/avatar', {
+    public_id: body.public_id,
+    version: String(body.version),
+    signature: body.signature,
+  })
+  return saved.avatar_url
+}
+
+function PhotoRow({ user }: { user: User }) {
+  const client = useQueryClient()
+  const input = useRef<HTMLInputElement>(null)
+  const refresh = () => Promise.all(['me', 'profile', 'leaderboard'].map((key) => client.invalidateQueries({ queryKey: [key] })))
+  const upload = useMutation({ mutationFn: uploadPhoto, onSuccess: refresh })
+  const remove = useMutation({ mutationFn: () => send('DELETE', '/v1/me/avatar'), onSuccess: refresh })
+  const pick = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (file) upload.mutate(file)
+  }
+  const busy = upload.isPending || remove.isPending
+  return (
+    <>
+      <div className="setting-row">
+        <Avatar name={user.username} src={user.avatar_url} size="lg" />
+        <div className="grow">
+          <div className="muted small">Profile photo</div>
+          <div className="strong">{upload.isPending ? 'Uploading…' : user.avatar_url ? 'Shown on your profile and the leaderboard' : 'No photo yet'}</div>
+        </div>
+        <input ref={input} type="file" accept={PHOTO_TYPES.join(',')} hidden onChange={pick} aria-label="Choose a profile photo" />
+        <button type="button" className="button ghost small" disabled={busy} onClick={() => input.current?.click()}>
+          {user.avatar_url ? 'Change' : 'Upload'}
+        </button>
+        {user.avatar_url && (
+          <button type="button" className="button ghost small" disabled={busy} onClick={() => remove.mutate()}>
+            Remove
+          </button>
+        )}
+      </div>
+      <Notice error={upload.error ?? remove.error} />
+    </>
   )
 }
 
@@ -387,6 +446,7 @@ export function Settings({ user }: { user: User }) {
     <div className="stack">
       <section className="panel settings-card" aria-labelledby="acct-h">
         <h2 id="acct-h">Account</h2>
+        <PhotoRow user={user} />
         <UsernameRow user={user} />
         <EmailRow user={user} />
         <PasswordRow user={user} />

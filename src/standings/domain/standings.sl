@@ -4,6 +4,7 @@ pub gc struct StandingsRow {
     account_id: str,
     username: str,
     avatar_color: str,
+    avatar_url: str,
     profit: int,
     calls: int,
     wins: int,

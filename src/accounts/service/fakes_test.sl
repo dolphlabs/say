@@ -77,11 +77,12 @@ fn as_account(f: FakeAccount) -> domain.Account {
     if let _h = f.hash {
         has_password = true;
     }
+    let no_avatar: opt[str] = none;
     return domain.Account {
         id: f.id, username: f.username, email: email, status: f.status,
         email_verified: f.status == "ACTIVE", has_password: has_password,
         google_linked: len(f.google_sub) > 0,
-        username_changeable_at: timez.unix(0), created_at: timez.unix(0)
+        username_changeable_at: timez.unix(0), created_at: timez.unix(0), avatar_url: no_avatar
     };
 }
 
@@ -638,7 +639,8 @@ fn fake_config() -> AuthConfig {
         google_client_id: "client-1",
         google_redirect_uri: "https://api.say.test/v1/auth/google/callback",
         google_auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-        dummy_hash: "stub$dummy"
+        dummy_hash: "stub$dummy",
+        avatars: domain.AvatarKeys { cloud_name: "demo", api_key: "123", api_secret: "secret" }
     };
 }
 

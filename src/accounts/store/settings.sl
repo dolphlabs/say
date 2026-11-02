@@ -252,6 +252,7 @@ pub fn anonymise_account(s: Store, account_id: str, anon_username: str, anon_ema
         "  password_hash = null, " +
         "  google_sub = null, " +
         "  phone = null, " +
+        "  avatar_url = null, " +
         "  leaderboard_eligible = false, " +
         "  deleted_at = coalesce(deleted_at, now()) " +
         "where id = $3::uuid";
@@ -268,6 +269,15 @@ pub fn anonymise_account(s: Store, account_id: str, anon_username: str, anon_ema
         }
     }
     return ok(out);
+}
+
+pub fn set_avatar_url(s: Store, account_id: str, url: opt[str]) -> result[bool, str] {
+    let arg = pg.arg_null();
+    if let u = url { arg = pg.arg_text(u); }
+    let r = pg.pool_query(s.pg, "update accounts set avatar_url = $2 where id = $1::uuid and deleted_at is null",
+        [pg.arg_text(account_id), arg], pg_until());
+    guard let _ok = r else let e = err_of(r) { return err(e); }
+    return ok(true);
 }
 
 pub fn settings_store(s: Store) -> service.SettingsStore[Store] {
@@ -290,6 +300,7 @@ pub fn settings_store(s: Store) -> service.SettingsStore[Store] {
         grant_role_direct: grant_role_direct,
         revoke_role_direct: revoke_role_direct,
         open_markets_for_account: open_markets_for_account,
-        anonymise_account: anonymise_account
+        anonymise_account: anonymise_account,
+        set_avatar_url: set_avatar_url
     };
 }

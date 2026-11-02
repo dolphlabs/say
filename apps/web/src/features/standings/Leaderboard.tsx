@@ -38,7 +38,7 @@ function Row({ row, me }: { row: StandingRow; me?: boolean }) {
       <td className="muted strong">{row.rank}</td>
       <td>
         <Link to="/users/$username" params={{ username: row.username }} className="player">
-          <Avatar name={row.username} color={row.avatar_color} size="sm" />
+          <Avatar name={row.username} color={row.avatar_color} src={row.avatar_url} size="sm" />
           <span>@{row.username}</span>
           {me && <span className="you">You</span>}
         </Link>
