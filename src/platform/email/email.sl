@@ -114,7 +114,23 @@ fn sendbyte_send(s: SendByteSender, msg: EmailMessage) -> result[bool, str] {
         return err("sendbyte request failed: " + e);
     }
     if resp.status < 200 || resp.status >= 300 {
-        return err("sendbyte returned status " + to_str(resp.status));
+        return err(provider_error(resp.status, strings.from_bytes(resp.body, 0, len(resp.body))));
     }
     return ok(true);
+}
+
+// The provider's own reason (bad key, unverified sender...) is what an
+// operator needs in the log; the status alone says nothing actionable.
+fn provider_error(status: int, body: str) -> str {
+    let head = "sendbyte returned status " + to_str(status);
+    let reason = strings.trim(body);
+    let parsed = zokor.parse(reason);
+    if let j = parsed {
+        let found = j.get("error").get("message").str_or(j.get("message").str_or(j.get("error").str_or("")));
+        if len(found) > 0 { reason = found; }
+    }
+    reason = strings.replace(strings.replace(reason, "\r", " "), "\n", " ");
+    if len(reason) == 0 { return head; }
+    if len(reason) > 300 { reason = strings.slice(reason, 0, 300) + "…"; }
+    return head + ": " + reason;
 }

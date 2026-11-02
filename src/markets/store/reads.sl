@@ -127,6 +127,40 @@ fn source_create(s: Store,actor_id: str,name: str,url: str,kind: str,now: int) -
     return ok(source);
 }
 
+gc struct ApproveSourceArg { store: Store, actor_id: str, id: str, now: int }
+gc struct SourceOwner { created_by: str, approved: bool }
+
+fn source_approve_tx(c: pg.Conn,a: ApproveSourceArg) -> result[service.Source,str] {
+    let d=deadline(a.store);
+    let ar=actor(c,a.actor_id,d);
+    guard let caller=ar else let e=err_of(ar) { return err(e); }
+    if !domain.reviewer(caller) { return err(failure_text(service.failure("FORBIDDEN_ROLE",""))); }
+    let or: result[[SourceOwner],str]=zokor.conn_query_all(c,
+        "select created_by::text as created_by,approved from resolution_sources where id=$1::uuid for update",[pg.arg_text(a.id)],d);
+    guard let owners=or else let e=err_of(or) { return err(e); }
+    if len(owners)==0 { return err(failure_text(service.failure("NOT_FOUND",""))); }
+    if !owners[0].approved && owners[0].created_by==a.actor_id { return err(failure_text(service.failure("SELF_APPROVAL_FORBIDDEN",""))); }
+    let rr: result[[service.Source],str]=zokor.conn_query_all(c,
+        "update resolution_sources set approved=true,approved_by=coalesce(approved_by,$2::uuid),approved_at=coalesce(approved_at,to_timestamp($3::bigint/1000.0)) " +
+        "where id=$1::uuid returning id::text as id,name,url_pattern,kind,approved",
+        [pg.arg_text(a.id),pg.arg_text(a.actor_id),pg.arg_int(a.now)],d);
+    guard let rows=rr else let e=err_of(rr) { return err(e); }
+    if owners[0].approved { return ok(rows[0]); }
+    let r=exec(c,
+        "with a as (insert into audit_events(actor_id,action,target_type,target_id,detail,created_at) " +
+        "values($1::uuid,'resolution_source.approved','resolution_source',$2,'{}'::jsonb,to_timestamp($3::bigint/1000.0))) " +
+        "insert into outbox_events(type,payload,created_at) values('resolution_source.approved',jsonb_build_object('source_id',$2::text),to_timestamp($3::bigint/1000.0))",
+        [pg.arg_text(a.actor_id),pg.arg_text(a.id),pg.arg_int(a.now)],d);
+    guard let _r=r else let e=err_of(r) { return err(e); }
+    return ok(rows[0]);
+}
+
+fn source_approve(s: Store,actor_id: str,id: str,now: int) -> result[service.Source,service.Failed] {
+    let r=zokor.transaction(s.pool,ApproveSourceArg { store:s,actor_id:actor_id,id:id,now:now },source_approve_tx,deadline(s));
+    guard let source=r else let e=err_of(r) { return err(parse_failure(e)); }
+    return ok(source);
+}
+
 fn lease_try(s: Store,key: int) -> result[opt[int],str] { return ledger_store.worker_lease_try(s.coordinator,key); }
 fn lease_release(s: Store,id: int) { ledger_store.worker_lease_release(s.coordinator,id); }
 

@@ -22,6 +22,9 @@ fn fake_history(f: Fake,id: str,actor: str) -> result[str,Failed] { return ok("{
 fn fake_source(f: Fake,actor: str,name: str,url: str,kind: str,now: int) -> result[Source,Failed] {
     return ok(Source { id:"source",name:name,url_pattern:url,kind:kind,approved:false });
 }
+fn fake_source_approve(f: Fake,actor: str,id: str,now: int) -> result[Source,Failed] {
+    return ok(Source { id:id,name:"source",url_pattern:"https://example.test",kind:"html",approved:true });
+}
 fn fake_lease(f: Fake,key: int) -> result[opt[int],str] { let missing: opt[int]=none; return ok(missing); }
 fn fake_release(f: Fake,key: int) {}
 fn fake_validate(f: Fake,m: domain.Market,full: bool,now: int) -> result[[domain.Problem],Failed] {
@@ -31,6 +34,6 @@ fn fake_validate(f: Fake,m: domain.Market,full: bool,now: int) -> result[[domain
 fn fake_id() -> str { return "11111111-1111-4111-a111-111111111111"; }
 fn fake_service(f: Fake) -> Markets[Fake] {
     return new_markets(MarketStore[Fake] { context:f,mutate:fake_mutate,find:fake_find,snapshot:fake_snapshot,
-        due:fake_due,history:fake_history,source_create:fake_source,lease_try:fake_lease,lease_release:fake_release,
+        due:fake_due,history:fake_history,source_create:fake_source,source_approve:fake_source_approve,lease_try:fake_lease,lease_release:fake_release,
         validate:fake_validate },fake_id,timez.fixed_clock(timez.unix(100)));
 }

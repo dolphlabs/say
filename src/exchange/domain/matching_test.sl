@@ -187,3 +187,32 @@ fn test_authoritative_rejection_releases_verified_holds_without_changing_mode_or
     assert(plan(&b, cmd, &mut w) == "INVALID_REJECTION_REASON");
     assert(!w.ready && physical_book(&b) == before);
 }
+
+fn test_cancel_all_cancels_all_resting_orders_for_account_in_one_transition() {
+    let created = new_book(fixture_policy(100), 8, 10); guard let b = created else { panic("book"); }
+    let w = new_workspace(&b, 8);
+    // Account 11 places two resting orders on different levels/sides
+    place_fixture(&mut b, fixture_order(1, 1, 11, "YES", "SELL", 60, 2), &mut w);
+    place_fixture(&mut b, fixture_order(2, 2, 11, "NO", "BUY", 35, 3), &mut w);
+    // Account 12 places one resting order
+    place_fixture(&mut b, fixture_order(3, 3, 12, "YES", "SELL", 65, 4), &mut w);
+    assert(b.active_count == 3);
+
+    // CancelAll for Account 11
+    let cmd = fixture_command("CancelAll", 4);
+    cmd.account_id = fixture_id(11);
+    cmd.reason = "USER_CANCEL";
+    assert(plan(&b, cmd, &mut w) == "");
+    assert(w.transition.update_count == 2);
+    assert(w.updates[0].order.account_id == fixture_id(11) && w.updates[0].order.cancelled > 0);
+    assert(w.updates[1].order.account_id == fixture_id(11) && w.updates[1].order.cancelled > 0);
+    assert(apply(&mut b, &mut w) == "");
+    assert(verify(&b, &mut w) == "");
+
+    // Account 11 orders are gone, Account 12 order remains intact
+    assert(b.active_count == 1);
+    let rem_slot = find_order(&b, fixture_id(3), w.scratch.data);
+    assert(rem_slot >= 0);
+    assert(b.slots[rem_slot].order.account_id == fixture_id(12));
+}
+

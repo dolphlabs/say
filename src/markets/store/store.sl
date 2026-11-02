@@ -10,7 +10,7 @@ pub gc struct Store { pool: pg.Pool, timeout: int, coordinator: ledger_store.Pos
 
 pub fn on_postgres(pool: pg.Pool, timeout: int, coordinator: ledger_store.Postgres, zone: timez.Zone) -> service.MarketStore[Store] {
     return service.MarketStore[Store] { context: Store { pool: pool, timeout: timeout, coordinator: coordinator, zone: zone },
-        mutate: mutate, find: find, snapshot: read_snapshot, due: due, history: history, source_create: source_create,
+        mutate: mutate, find: find, snapshot: read_snapshot, due: due, history: history, source_create: source_create, source_approve: source_approve,
         lease_try: lease_try, lease_release: lease_release, validate: validate };
 }
 

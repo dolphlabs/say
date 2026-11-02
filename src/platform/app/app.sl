@@ -19,15 +19,39 @@ import "../../markets/service" as markets;
 import "../../markets/store" as markets_store;
 import "../../exchange/service" as exchange;
 import "../../exchange/store" as exchange_store;
+import "../../stream/service" as stream_svc;
+import "../../stream/store" as stream_store;
+import "../../portfolio/service" as portfolio_svc;
+import "../../portfolio/store" as portfolio_store;
+import "../../notifications/service" as notifications_svc;
+import "../../notifications/store" as notifications_store;
+import "../../resolution/service" as resolution_svc;
+import "../../resolution/store" as resolution_store;
+import "../../treasury/service" as treasury;
+import "../../treasury/store" as treasury_store;
+import "../../standings/service" as standings_svc;
+import "../../standings/store" as standings_store;
+import "../../profiles/service" as profile_svc;
+import "../../profiles/store" as profile_store;
+import "../../audit/service" as audit_svc;
+import "../../audit/store" as audit_store;
+import "../../approvals/service" as approvals_svc;
+import "../../approvals/store" as approvals_store;
 // zokor:imports
 
 pub gc struct Postman {
     email: email.Email,
-    from: str
+    from: str,
+    app_url: str
 }
 
 pub gc struct App {
     markets: markets.Markets[markets_store.Store],
+    treasury: treasury.TreasuryService[treasury_store.PostgresTreasuryStore],
+    standings: standings_svc.StandingsService[standings_store.PostgresStandingsStore],
+    profiles: profile_svc.ProfileService[profile_store.PostgresProfileStore],
+    audit: audit_svc.AuditService[audit_store.PostgresAuditStore],
+    approvals: approvals_svc.ApprovalsService[pg.Pool],
     // zokor:fields
     accounts: accounts.Auth[accounts_store.Store],
     ledger: ledger.Ledger[ledger_store.Postgres],
@@ -39,6 +63,10 @@ pub gc struct App {
     exchange_reads: exchange.ReadStore[exchange_store.Postgres],
     book_views: exchange.BookViewStore[exchange_store.Postgres],
     recovery_store: exchange.RecoveryStore[exchange_store.Postgres],
+    stream: stream_svc.StreamService[stream_store.PostgresRedisStore],
+    portfolio: portfolio_svc.PortfolioService[portfolio_store.PostgresPortfolioStore],
+    notifications: notifications_svc.NotificationService[notifications_store.PostgresNotificationStore],
+    resolution: resolution_svc.ResolutionService[resolution_store.PostgresResolutionStore],
     node_id: str,
     runtime: RuntimeControl,
     runtime_views: map[str]str,
@@ -64,21 +92,29 @@ pub fn new_uuid() -> str {
 }
 
 fn send_mail(p: Postman, m: accounts.Mail) -> result[bool, str] {
-    let subject = "Your say code";
-    let html = templates.verify_email_html(m.username, m.code);
-    let text = templates.verify_email_text(m.username, m.code);
+    let subject = "Finish signing up for say";
+    let r = templates.Recipient { username: m.username, to: m.to, app_url: p.app_url };
+    let html = templates.verify_email_html(r, m.code);
+    let text = templates.verify_email_text(r, m.code);
     if m.purpose == "reset_password" {
-        subject = "Reset your say password";
-        html = templates.reset_password_html(m.username, m.code);
-        text = templates.reset_password_text(m.username, m.code);
+        subject = "Your code to get back into say";
+        html = templates.reset_password_html(r, m.code);
+        text = templates.reset_password_text(r, m.code);
     }
     return email.send(p.email, email.EmailMessage {
         from: p.from, to: [m.to], subject: subject, html: html, text: text, tags: [m.purpose]
     });
 }
 
-pub fn mailer_on(e: email.Email, from: str) -> accounts.Mailer[Postman] {
-    return accounts.Mailer[Postman] { context: Postman { email: e, from: from }, send: send_mail };
+fn without_trailing_slash(u: str) -> str {
+    if strings.has_suffix(u, "/") {
+        return strings.slice(u, 0, len(u) - 1);
+    }
+    return u;
+}
+
+pub fn mailer_on(e: email.Email, from: str, app_url: str) -> accounts.Mailer[Postman] {
+    return accounts.Mailer[Postman] { context: Postman { email: e, from: from, app_url: without_trailing_slash(app_url) }, send: send_mail };
 }
 
 fn email_for(s: config.Settings) -> email.Email {
@@ -153,11 +189,36 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     registry.close_workers=s.markets.close_workers;
     registry.history_generations=s.markets.history_generations;
     let runtime_views:map[str]str={};
+    let runtime_views_lock = make_mutex();
+    let opt_redis: opt[redis.Pool] = c.pool;
+    let s_store = stream_store.make_stream_store(d.pool, opt_redis, runtime_views, runtime_views_lock);
+    let s_service = stream_svc.new_stream_service(s_store);
+    let port_store = portfolio_store.make_postgres_portfolio_store(d.pool);
+    let port_service = portfolio_svc.new_portfolio_service(port_store);
+    let notif_store = notifications_store.make_postgres_notification_store(d.pool);
+    let notif_service = notifications_svc.new_notification_service(notif_store, s.auth.otp_secret);
+    let res_store = resolution_store.make_postgres_resolution_store(d.pool);
+    let res_service = resolution_svc.new_resolution_service(res_store);
+    let tr_store = treasury_store.make_postgres_treasury_store(d.pool);
+    let tr_service = treasury.new_treasury_service(treasury_store.treasury_store(tr_store));
+    let st_store = standings_store.new_store(d.pool);
+    let st_service = standings_svc.new_service(standings_store.standings_store(st_store));
+    let pr_store = profile_store.new_store(d.pool);
+    let pr_service = profile_svc.new_service(profile_store.profile_store(pr_store));
+    let au_store = audit_store.new_store(d.pool);
+    let au_service = audit_svc.new_service(audit_store.audit_store(au_store));
+    let ap_store = approvals_store.approval_store(d.pool);
+    let ap_service = approvals_svc.new_service(ap_store);
     let snapshot_queue:chan[exchange.SnapshotWrite]=make_chan(64);
     return ok(App {
         markets: registry,
+        treasury: tr_service,
+        standings: st_service,
+        profiles: pr_service,
+        audit: au_service,
+        approvals: ap_service,
         // zokor:build
-        accounts: accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid),
+        accounts: accounts.with_settings(accounts.new_auth(accounts_store.auth_store(st), auth_config(s, dummy), hasher, new_uuid), accounts_store.settings_store(st)),
         ledger: ledger.new_ledger(ledger_store.ledger_store(lst), lcfg, clock),
         ownership: ownership,
         heartbeat_ownership: heartbeat_ownership,
@@ -167,13 +228,17 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         exchange_reads: exchange_reads,
         book_views: book_views,
         recovery_store: recovery_store,
+        stream: s_service,
+        portfolio: port_service,
+        notifications: notif_service,
+        resolution: res_service,
         node_id: node_id,
         runtime: new_runtime_control(),
         runtime_views: runtime_views,
-        runtime_views_lock: make_mutex(),
+        runtime_views_lock: runtime_views_lock,
         snapshot_queue: snapshot_queue,
         reply_slots: make_chan(s.exchange.max_waiters),
-        mailer: mailer_on(mail, s.email.from),
+        mailer: mailer_on(mail, s.email.from, s.auth.app_url),
         settings: s,
         metrics: metrics.new_registry(),
         db: some(d),
@@ -245,6 +310,43 @@ pub fn public_market_exists(a: App, market_id: str) -> result[bool,str] {
     return ok(false);
 }
 
+pub fn get_portfolio_market_stats(a: App) -> map[str]portfolio_svc.MarketPriceStats {
+    let out: map[str]portfolio_svc.MarketPriceStats = {};
+    let snap_res = markets.snapshot(a.markets);
+    guard let snap = snap_res else {
+        return out;
+    }
+    for item in snap.stats {
+        let has_last = false;
+        let last_p = 0;
+        if let lp = item.last_price {
+            has_last = true;
+            last_p = lp;
+        }
+        let has_bid = false;
+        let bid = 0;
+        if let b = item.yes_bid {
+            has_bid = true;
+            bid = b;
+        }
+        let has_ask = false;
+        let ask = 0;
+        if let k = item.yes_ask {
+            has_ask = true;
+            ask = k;
+        }
+        out[item.market_id] = portfolio_svc.MarketPriceStats {
+            last_price: last_p,
+            has_last_price: has_last,
+            best_bid: bid,
+            has_best_bid: has_bid,
+            best_ask: ask,
+            has_best_ask: has_ask
+        };
+    }
+    return out;
+}
+
 pub fn build(s: config.Settings, d: db.Db, c: cache.Cache) -> result[App, str] {
     return wire(s, d, c, email_for(s));
 }
@@ -275,6 +377,18 @@ pub gc struct Caller {
 
 pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
     let none_caller: opt[Caller] = none;
+    if len(token) >= 8 && strings.slice(token, 0, 8) == "say_bot_" {
+        if let d = a.db {
+            let h = encoding.hex_encode(crypto.sha256(to_bytes(token)));
+            let lk = db.lookup_bot_key(d, h, until_of(time.mono() + 2000000000));
+            if let found_opt = lk {
+                if let bot_id = found_opt {
+                    return ok(some(Caller { account_id: bot_id, session_hash: h }));
+                }
+            }
+        }
+        return ok(none_caller);
+    }
     let r = accounts.authenticate(a.accounts, token);
     guard let found = r else let f = err_of(r) {
         return err(f.detail);
@@ -307,6 +421,18 @@ pub fn has_role(a: App, account_id: str, role: str) -> result[bool, str] {
         }
     }
     return ok(false);
+}
+
+pub fn has_recent_totp(a: App, session_id: str, account_id: str) -> bool {
+    return accounts.has_recent_totp(a.accounts, session_id, account_id);
+}
+
+pub fn cancel_all_orders_for_market(a: App, market_id: str, account_id: str, command_ref: str) -> result[exchange.EnqueueResult, str] {
+    return exchange.enqueue_cancel_all(a.command_queue, market_id, account_id, command_ref);
+}
+
+pub fn request_approval(a: App, kind: str, subject_type: str, subject_id: str, payload_hash: str, requester: str, round: int, slot: int, reason: str, now_ms: int) -> result[str, str] {
+    return approvals_svc.request(a.approvals, kind, subject_type, subject_id, payload_hash, requester, round, slot, reason, now_ms);
 }
 
 // The ledger's background reports, into the log and the metrics.
@@ -407,6 +533,26 @@ pub fn start_workers(a: App) {
     if len(a.settings.auth.google_client_id) > 0 {
         spawn accounts.run_jwks_refresher(a.accounts);
     }
+    start_stream_workers(a);
+    spawn run_closing_soon_scheduler(a);
+    spawn run_resolution_watchers(a);
+    spawn standings_svc.run_standings_worker(a.standings);
+}
+
+fn run_resolution_watchers(a: App) -> int {
+    while true {
+        time.sleep(10000000000); // 10s
+        let _ = resolution_svc.tick_watchers(a.resolution);
+    }
+    return 0;
+}
+
+fn run_closing_soon_scheduler(a: App) -> int {
+    while true {
+        time.sleep(30000000000); // 30s
+        let _ = notifications_svc.poll_closing_soon(a.notifications);
+    }
+    return 0;
 }
 
 fn run_exchange_view_hydrator(a: App) -> int {
@@ -487,6 +633,90 @@ fn drain_market_signals(a: App) -> int {
         let got=chan_recv(a.markets.problems);
         guard let message=got else { return 0; }
         a.settings.server.logger.warn("markets",message);
+    }
+    return 0;
+}
+
+pub fn start_stream_workers(a: App) {
+    for s in 0..64 {
+        spawn run_stream_shard_reader(a, s);
+    }
+    spawn run_stream_cards_ticker(a);
+    spawn run_stream_session_revocations(a);
+    spawn run_stream_session_rechecker(a);
+}
+
+fn run_stream_shard_reader(a: App, shard: int) -> int {
+    let last_id = "$";
+    while true {
+        let now_ms = (time.mono() / 1000000) as int;
+        let read_fn = a.stream.store.read_shard_stream;
+        let read_res = read_fn(a.stream.store.context, shard, last_id, 1000, 100);
+        if let msgs = read_res {
+            for m in msgs {
+                last_id = m.id;
+                stream_svc.dispatch_private_event(a.stream.shards, m, now_ms);
+            }
+        } else {
+            time.sleep(200000000);
+        }
+    }
+    return 0;
+}
+
+fn run_stream_cards_ticker(a: App) -> int {
+    while true {
+        time.sleep(1000000000);
+        let now_ms = (time.mono() / 1000000) as int;
+        let stats_fn = a.stream.store.get_market_stats;
+        let stats_res = stats_fn(a.stream.store.context);
+        if let stats = stats_res {
+            stream_svc.dispatch_cards_tick(a.stream.ticker, stats, now_ms);
+        }
+    }
+    return 0;
+}
+
+fn run_stream_session_revocations(a: App) -> int {
+    let last_id = "$";
+    while true {
+        let now_ms = (time.mono() / 1000000) as int;
+        let read_fn = a.stream.store.read_session_revocations;
+        let read_res = read_fn(a.stream.store.context, last_id, 1000, 100);
+        if let sessions = read_res {
+            for sess in sessions {
+                last_id = sess.id;
+                stream_svc.revoke_session(a.stream, sess.session_id, now_ms);
+            }
+        } else {
+            time.sleep(500000000);
+        }
+    }
+    return 0;
+}
+
+fn run_stream_session_rechecker(a: App) -> int {
+    while true {
+        time.sleep(300000000000);
+        let sessions_to_check: [str] = [];
+        mutex_lock(a.stream.conns_lock);
+        for cid, c in a.stream.conns {
+            if c.session_id != "" {
+                push(sessions_to_check, c.session_id);
+            }
+        }
+        mutex_unlock(a.stream.conns_lock);
+
+        let now_ms = (time.mono() / 1000000) as int;
+        for sess_id in sessions_to_check {
+            let chk_fn = a.stream.store.is_session_valid;
+            let chk = chk_fn(a.stream.store.context, sess_id);
+            if let valid = chk {
+                if !valid {
+                    stream_svc.revoke_session(a.stream, sess_id, now_ms);
+                }
+            }
+        }
     }
     return 0;
 }

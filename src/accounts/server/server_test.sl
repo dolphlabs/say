@@ -13,6 +13,8 @@ import "../../platform/config" as config;
 import "../../platform/db" as db;
 import "../../platform/email" as email;
 import "../../platform/web" as web;
+import "../../approvals/server" as approval_server;
+import "../../resolution/server" as resolution_server;
 import "../../ledger/store" as ledger_store;
 
 gc struct Rig {
@@ -84,6 +86,75 @@ fn get(r: zokor.Router[app.App], path: str, cookie: str) -> http.Response {
         req = req.header("cookie", cookie);
     }
     return r.serve(req.build());
+}
+
+fn proof_status(c: zokor.Ctx[app.App]) -> http.Response {
+    if auth.has_recent_totp(c, c.local("account_id")) { return zokor.no_content(); }
+    return http.text_response(403, "Forbidden", "text/plain", "verification required");
+}
+
+fn test_totp_step_up_is_bound_to_the_authenticated_session() {
+    guard let g = rig() else { return; }
+    let protected = g.r.group("/test-proof");
+    protected.before(auth.require_session);
+    protected.get("", proof_status);
+    let person = verified_person(g);
+    assert(zokor.resp_status(get(g.r, "/test-proof", person.cookie)) == 403);
+
+    let enrolled = post(g.r, "/v1/me/2fa/enroll", "{}", person.cookie);
+    assert(zokor.resp_status(enrolled) == 200, zokor.resp_text(enrolled));
+    let secret_text = zokor.resp_json(enrolled).get("secret").str_or("");
+    let decoded = domain.base32_decode(secret_text);
+    guard let secret = decoded else let e = err_of(decoded) { panic(e); }
+    let code = domain.totp_code_at(secret, (time.wall() / 1000000000) as int);
+    let verified = post(g.r, "/v1/me/2fa/verify", "{\"code\":\"" + code + "\"}", person.cookie);
+    assert(zokor.resp_status(verified) == 200, zokor.resp_text(verified));
+    assert(zokor.resp_status(get(g.r, "/test-proof", person.cookie)) == 204);
+    let another_login = post(g.r, "/v1/auth/login", "{\"email\":\"" + person.email + "\",\"password\":\"correct horse\"}", "");
+    assert(zokor.resp_status(another_login) == 200, zokor.resp_text(another_login));
+    let other_cookie = session_cookie_of(another_login);
+    assert(zokor.resp_status(get(g.r, "/test-proof", other_cookie)) == 403);
+}
+
+fn caller_echo(c: zokor.Ctx[app.App]) -> http.Response {
+    return http.text_response(200, "OK", "text/plain", c.local("account_id"));
+}
+
+fn test_optional_session_personalises_without_requiring_a_session() {
+    guard let g = rig() else { return; }
+    let open = g.r.group("/test-optional");
+    open.before(auth.optional_session);
+    open.get("", caller_echo);
+    let person = verified_person(g);
+    let me = zokor.resp_json(get(g.r, "/v1/me", person.cookie)).get("id").str_or("");
+    let anonymous = get(g.r, "/test-optional", "");
+    assert(zokor.resp_status(anonymous) == 200 && zokor.resp_text(anonymous) == "", zokor.resp_text(anonymous));
+    let signed = get(g.r, "/test-optional", person.cookie);
+    assert(zokor.resp_status(signed) == 200 && zokor.resp_text(signed) == me, zokor.resp_text(signed));
+    let stale = get(g.r, "/test-optional", "say_session=not-a-real-session");
+    assert(zokor.resp_status(stale) == 200 && zokor.resp_text(stale) == "", zokor.resp_text(stale));
+}
+
+fn test_operator_reads_and_approvals_require_roles_and_step_up() {
+    guard let g = rig() else { return; }
+    approval_server.mount(g.r);
+    resolution_server.mount(g.r);
+    let person = verified_person(g);
+    assert(zokor.resp_status(get(g.r, "/v1/admin/approvals", person.cookie)) == 403);
+    assert(zokor.resp_status(get(g.r, "/v1/admin/resolutions", person.cookie)) == 403);
+    assert(zokor.resp_status(get(g.r, "/v1/admin/resolutions/00000000-0000-4000-8000-000000000001", person.cookie)) == 403);
+    assert(zokor.resp_status(get(g.r, "/v1/admin/settlements/00000000-0000-4000-8000-000000000001", person.cookie)) == 403);
+    let me = get(g.r, "/v1/me", person.cookie);
+    assert(zokor.resp_json(me).get("roles").size() == 0, zokor.resp_text(me));
+    let id = zokor.resp_json(me).get("id").str_or("");
+    let granted = accounts.grant_role(g.r.state.accounts, id, "super_admin");
+    guard let _ok = granted else let e = err_of(granted) { panic(e.detail); }
+    let operator = get(g.r, "/v1/me", person.cookie);
+    assert(zokor.resp_json(operator).get("roles").at(0).str_or("") == "super_admin", zokor.resp_text(operator));
+    assert(zokor.resp_status(get(g.r, "/v1/admin/approvals", person.cookie)) == 200);
+    let decision = post(g.r, "/v1/admin/approvals/00000000-0000-4000-8000-000000000001/approve", "{\"payload_hash\":\"x\"}", person.cookie);
+    assert(zokor.resp_status(decision) == 403);
+    assert(error_code(decision) == "APPROVALS.TOTP_REQUIRED");
 }
 
 fn delete(r: zokor.Router[app.App], path: str, cookie: str) -> http.Response {

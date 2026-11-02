@@ -1,5 +1,5 @@
 pub fn required_votes(kind: str) -> int {
-    if kind == "issuance_policy" || kind == "bot_season_budget" { return 2; }
+    if kind == "issuance_policy" || kind == "bot_season_budget" || kind == "void_shortfall" { return 2; }
     return 1;
 }
 

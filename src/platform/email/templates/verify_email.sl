@@ -1,19 +1,21 @@
-pub fn verify_email_html(username: str, code: str) -> str {
-    return code_email_html(
-        "Verify your say account",
-        "Verify your email address",
-        username,
-        "Welcome to Say. Enter this code to verify your email and claim your S 1,000.",
-        code,
-        "If you did not sign up, you can ignore this email. Never share this code with anyone."
-    );
+pub fn verify_email_html(r: Recipient, code: str) -> str {
+    return code_email_html(r, CodeEmail {
+        title: "Finish signing up for say",
+        badge: "Your code",
+        lead: "Here's your",
+        mark: "code",
+        intro: "Type this into say to finish signing up.",
+        code: code,
+        footnote: "Didn't sign up for say? Ignore this email and nothing happens."
+    });
 }
 
-pub fn verify_email_text(username: str, code: str) -> str {
-    return "Hi " + username + ",\n\n" +
-        "Welcome to Say. Your verification code is:\n\n" +
+pub fn verify_email_text(r: Recipient, code: str) -> str {
+    return "Hi " + r.username + ",\n\n" +
+        "Type this into say to finish signing up:\n\n" +
         code + "\n\n" +
-        "This code expires in 10 minutes.\n\n" +
-        "If you did not request this, please disregard this email.\n\n" +
-        "-- Say Exchange";
+        "Expires in 10 minutes.\n\n" +
+        "Didn't sign up for say? Ignore this email and nothing happens.\n\n" +
+        "-- the say crew\n" +
+        "say is a free prediction game by Dolphlabs. Sedis are play credits with no cash value.";
 }

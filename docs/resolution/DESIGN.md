@@ -32,26 +32,18 @@ trades, decide automatically from a parser, or pay a proposed outcome.
 
 Inspected implementation facts:
 
-- Auth/ledger exist. Registry, core, runtime, stream and portfolio remain
-  proposed documents; positions, generic approvals and position_results
-  are not yet implemented tables/services in this workspace.
-- Migration 001 has a baseline mutable market_resolutions table and
-  settlement_claims, but no evidence, proposals or final decision history.
-  Extend/migrate these deliberately; do not create a competing live model.
-- Ledger PAYOUT already exists. VOID_REFUND, FEE_REFUND and
-  VOID_COLLATERAL_RELEASE do not exist in its domain/DB kind allow-lists.
-- Current kind_allowed permits PAYOUT only in CLOSING/CLOSED seasons.
-  A market can settle during an ACTIVE season, so that policy must be
-  extended explicitly with closed-market/final-decision guards.
-- post_many locks the union of user/bot wallets once; calling post twice
-  in one transaction is refused. System wallets have zero cached balances;
-  actual balances are journal sums and system rows are not hot balance locks.
-- settlement_complete in ledger/store/seasons.sl is an unused placeholder;
-  tick_tx currently has no CLOSED→FINALIZED transition. Replacing the
-  placeholder alone would not wire finalization.
-- Generic approvals/market versions and runtime Close proof are proposed
-  dependencies, not callable APIs to assume. Resolve their contracts before
-  this module's implementation.
+- Prompts 01–07 are fully implemented and verified in this workspace:
+  - Auth (01) and Ledger (02) manage identities, accounts, sessions, and journaled postings.
+  - Markets (03) manages states (`DRAFT` → `ACTIVE` → `CLOSED` → `RESOLUTION_PENDING` → `RESOLVED`/`VOIDED` → `SETTLING` → `SETTLED`), `status_note`, and `approvals`.
+  - Exchange (04/05) matching engine and runtime manage `positions` (`qty`, `avg_cost`, `fees_paid`, `realized_pnl`), `Close` actor transitions that cancel resting orders and release holds, and outbox event streams.
+  - Live Feed (06) provides WebSocket streaming (`say-stream`) and outbox relay.
+  - Portfolio and Notifications (07) created the `position_results` table (migration 013), read endpoints (`/v1/me/portfolio/summary`, `/v1/me/positions`, `/v1/me/results`), and notification fanout pipeline.
+- Migration 001 contains legacy baseline `market_resolutions` and `settlement_claims` tables. Migration 014 will cleanly extend `market_resolutions` (adding state, version, proposal/decision pointers, dispute_until, flags) and add append-only tables `resolution_evidence`, `resolution_disputes`, `resolution_decisions`, and `settlement_jobs`.
+- Ledger `PAYOUT` already exists. `VOID_REFUND`, `FEE_REFUND`, and `VOID_COLLATERAL_RELEASE` will be added to domain model and PostgreSQL constraint allow-lists.
+- Current `kind_allowed` in `season.sl` permits `PAYOUT` only in `CLOSING`/`CLOSED` seasons. A market can resolve and settle during an `ACTIVE` season; settlement kinds will be permitted in `ACTIVE`, `CLOSING`, and `CLOSED` seasons when guarded by a closed market and an immutable resolution decision.
+- `post_many` locks user/bot wallets once in deterministic sorted order; system wallets use journal sums and do not hold balance locks.
+- `settlement_complete` in `ledger/store/seasons.sl` is an unused placeholder. Prompt 08 implements `season_can_finalize(season)` checking all markets in the season are `SETTLED` with zero unfinished settlement jobs, enabling the `CLOSED → FINALIZED` transition in `tick_tx`.
+- Generic `approvals` table (migration 006/009) supports `kind = 'void_shortfall'` for 2-super-admin approval of void shortfalls over S 50,000.
 
 Use `src/resolution/{domain,service,store,server}`. Pure domain includes
 state/authorization rules, source interpretation, settlement plans and

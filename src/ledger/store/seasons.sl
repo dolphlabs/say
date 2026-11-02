@@ -89,9 +89,35 @@ fn season_event(s: domain.Season, status: str) -> zokor.Json {
         .set_str("starts_at", s.starts_at.rfc3339()).set_str("ends_at", s.ends_at.rfc3339());
 }
 
-// Settlement arrives in prompt 08; until then no season can finalize.
+// Prompt 08: Season finalization checks all holds are released, all active markets are SETTLED,
+// and no settlement jobs in the season remain unfinished.
+pub fn season_can_finalize(c: pg.Conn, season_id: str, d: until) -> result[bool, str] {
+    let hr: result[[CountRow], str] = zokor.conn_query_all(c,
+        "select count(*)::bigint as n from holds where season_id = $1::uuid and status = 'open'",
+        [pg.arg_text(season_id)], d);
+    guard let holds = hr else let e = err_of(hr) { return err(e); }
+    if holds[0].n > 0 { return ok(false); }
+
+    let mr: result[[CountRow], str] = zokor.conn_query_all(c,
+        "select count(*)::bigint as n from markets where season_id = $1::uuid " +
+        "and status <> 'SETTLED' and status not in ('DRAFT', 'REJECTED', 'CHANGES_REQUESTED')",
+        [pg.arg_text(season_id)], d);
+    guard let markets = mr else let e = err_of(mr) { return err(e); }
+    if markets[0].n > 0 { return ok(false); }
+
+    let jr: result[[CountRow], str] = zokor.conn_query_all(c,
+        "select count(*)::bigint as n from settlement_jobs j " +
+        "join markets m on m.id = j.market_id " +
+        "where m.season_id = $1::uuid and j.done = false",
+        [pg.arg_text(season_id)], d);
+    guard let jobs = jr else let e = err_of(jr) { return err(e); }
+    if jobs[0].n > 0 { return ok(false); }
+
+    return ok(true);
+}
+
 pub fn settlement_complete(season_id: str) -> opt[str] {
-    return some("market settlement arrives in prompt 08");
+    return none;
 }
 
 fn system_wallets(c: pg.Conn, season_id: str, d: until) -> result[int, str] {
@@ -221,6 +247,24 @@ fn tick_tx(c: pg.Conn, t: TickArg) -> result[service.TickReport, str] {
     for row in closings {
         push(closed, row.ordinal);
         let er = emit(c, "season.closed", season_event(to_season(row), domain.closed()), d);
+        guard let _e = er else let e = err_of(er) {
+            return err(e);
+        }
+    }
+
+    // Prompt 08: CLOSED -> FINALIZED when every market in the season is SETTLED and all settlement jobs done
+    let fr: result[[SeasonRow], str] = zokor.conn_query_all(c,
+        "update seasons s set status = 'FINALIZED', finalized_at = $1 where s.status = 'CLOSED' " +
+        "and not exists (select 1 from holds h where h.season_id = s.id and h.status = 'open') " +
+        "and not exists (select 1 from markets m where m.season_id = s.id and m.status <> 'SETTLED' and m.status not in ('DRAFT', 'REJECTED', 'CHANGES_REQUESTED')) " +
+        "and not exists (select 1 from settlement_jobs j join markets m on m.id = j.market_id where m.season_id = s.id and j.done = false) " +
+        "returning s.id::text as id, s.ordinal, s.starts_at, s.ends_at, s.status",
+        [pg.arg_time(t.now)], d);
+    guard let finals = fr else let e = err_of(fr) {
+        return err(e);
+    }
+    for row in finals {
+        let er = emit(c, "season.finalized", season_event(to_season(row), domain.finalized()), d);
         guard let _e = er else let e = err_of(er) {
             return err(e);
         }

@@ -122,6 +122,12 @@ pub fn create_source[C](s: Markets[C],actor: str,name: str,url: str,kind: str) -
     return write(s.store.context,actor,name,url,kind,s.clock.now().unix_milli());
 }
 
+pub fn approve_source[C](s: Markets[C],actor: str,id: str) -> result[Source,Failed] {
+    if !uuid(id) { return err(failure("NOT_FOUND","")); }
+    let write=s.store.source_approve;
+    return write(s.store.context,actor,id,s.clock.now().unix_milli());
+}
+
 pub fn validate_fields[C](s: Markets[C],actor: str,p: domain.Patch) -> result[[domain.Problem],Failed] {
     let m=domain.patched(domain.draft("",actor,s.clock.now().unix_milli()),p);
     for id in [m.category_id,m.season_id,m.resolution_source_id] {

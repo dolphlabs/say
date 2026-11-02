@@ -30,6 +30,7 @@ pub fn command_queue(postgres: Postgres) -> service.CommandQueue[Postgres] {
         enqueue_control: st_enqueue_control,
         enqueue_cancel: st_enqueue_cancel,
         enqueue_cancel_owned: st_enqueue_cancel_owned,
+        enqueue_cancel_all: st_enqueue_cancel_all,
         load_pending: st_load_pending,
         sync_lifecycle: st_sync_lifecycle
     };

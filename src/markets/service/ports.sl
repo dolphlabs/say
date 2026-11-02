@@ -35,6 +35,7 @@ pub gc struct MarketStore[C] {
     due: fn(C, int) -> result[[domain.Market], str],
     history: fn(C, str, str) -> result[str, Failed],
     source_create: fn(C, str, str, str, str, int) -> result[Source, Failed],
+    source_approve: fn(C, str, str, int) -> result[Source, Failed],
     lease_try: fn(C, int) -> result[opt[int], str],
     lease_release: fn(C, int),
     validate: fn(C, domain.Market, bool, int) -> result[[domain.Problem], Failed]

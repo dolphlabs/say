@@ -676,6 +676,7 @@ All routes below require a session and §2.2 authorization:
 | `GET /v1/admin/markets/{id}/history` | Paginated immutable terms, approvals and audit, creator scope applied |
 | `GET /v1/admin/resolution-sources` | Curated definitions with approval flag |
 | `POST /v1/admin/resolution-sources` | Curator/super admin creates unapproved source; no payload can self-set approved |
+| `POST /v1/admin/resolution-sources/{id}/approve` | A different curator/super admin approves it; audited, and repeat calls change nothing |
 | `POST /v1/admin/markets/validate` | Partial/form fields, optional mode default full; returns valid flag and field errors without mutation |
 | Proposed `GET /v1/admin/markets/seasons` | New ledger-service projection over its `open_seasons` port, filtered to ACTIVE/SCHEDULED, with ordinal/start/end |
 

@@ -30,3 +30,11 @@ fn test_should_time_out_a_send_to_an_unreachable_provider() {
     }
     panic("sent to an unreachable provider");
 }
+
+fn test_should_report_the_provider_reason_for_a_rejected_send() {
+    assert(provider_error(403, "{\"error\":{\"message\":\"Sender domain not verified\"}}") == "sendbyte returned status 403: Sender domain not verified");
+    assert(provider_error(401, "{\"message\":\"Invalid API key\"}") == "sendbyte returned status 401: Invalid API key");
+    assert(provider_error(403, "{\"error\":\"forbidden\"}") == "sendbyte returned status 403: forbidden");
+    assert(provider_error(502, "Bad\ngateway") == "sendbyte returned status 502: Bad gateway");
+    assert(provider_error(403, "  ") == "sendbyte returned status 403");
+}

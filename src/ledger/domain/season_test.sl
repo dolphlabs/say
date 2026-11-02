@@ -101,7 +101,14 @@ fn test_should_allow_each_kind_only_in_its_season_statuses() {
     assert(!kind_allowed("ORDER_HOLD", closing()));
     assert(kind_allowed("ORDER_RELEASE", closing()));
     assert(!kind_allowed("SEASON_GRANT", scheduled()));
+    assert(kind_allowed("PAYOUT", active()));
     assert(kind_allowed("PAYOUT", closed()));
+    assert(!kind_allowed("PAYOUT", finalized()));
+    assert(kind_allowed("VOID_REFUND", active()));
+    assert(!kind_allowed("VOID_REFUND", finalized()));
+    assert(kind_allowed("FEE_REFUND", closed()));
+    assert(kind_allowed("VOID_COLLATERAL_RELEASE", active()));
     assert(!kind_allowed("ADJUSTMENT", finalized()));
     assert(needs_active("FILL") && !needs_active("ORDER_RELEASE"));
+    assert(!needs_active("PAYOUT") && !needs_active("VOID_REFUND"));
 }

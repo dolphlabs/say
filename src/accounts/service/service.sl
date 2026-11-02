@@ -60,6 +60,7 @@ pub gc struct Meta {
 
 pub gc struct Auth[C] {
     store: AuthStore[C],
+    settings: opt[SettingsStore[C]],
     cfg: AuthConfig,
     hasher: Hasher,
     audit: AuditLog,
@@ -70,8 +71,10 @@ pub gc struct Auth[C] {
 }
 
 pub fn new_auth[C](store: AuthStore[C], cfg: AuthConfig, hasher: Hasher, new_id: fn() -> str) -> Auth[C] {
+    let no_settings: opt[SettingsStore[C]] = none;
     return Auth[C] {
         store: store,
+        settings: no_settings,
         cfg: cfg,
         hasher: hasher,
         audit: new_audit_log(4096),
@@ -80,6 +83,11 @@ pub fn new_auth[C](store: AuthStore[C], cfg: AuthConfig, hasher: Hasher, new_id:
         problems: make_chan(256),
         new_id: new_id
     };
+}
+
+pub fn with_settings[C](a: Auth[C], s: SettingsStore[C]) -> Auth[C] {
+    a.settings = some(s);
+    return a;
 }
 
 fn fail(why: Why, detail: str) -> Failed {

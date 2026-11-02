@@ -11,6 +11,7 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     let orders=r.group("/v1/markets/:id/orders");
     orders.before(auth.require_session);
     orders.post("",place_order);
+    orders.delete("",cancel_all_orders);
     let order=r.group("/v1/orders");
     order.before(auth.require_session);
     order.get("/:id",get_order);
@@ -25,6 +26,26 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     book.get("/history",history);
     return 0;
 }
+
+fn cancel_all_orders(c: zokor.Ctx[app.App]) -> http.Response {
+    let market_id = c.param("id");
+    if !exchange.valid_uuid(market_id) { return fail(c, "BAD_REQUEST"); }
+    if c.query("mine") != "true" { return fail(c, "BAD_REQUEST"); }
+    if let response = order_rate_limit(c) { return response; }
+    let cancel_result = exchange.enqueue_cancel_all(c.state.command_queue, market_id,
+        c.local("account_id"), app.new_uuid());
+    guard let receipt = cancel_result else let e = err_of(cancel_result) {
+        if e == "QUEUE_FULL" { return fail(c, "QUEUE_FULL"); }
+        c.state.settings.server.logger.warn("exchange", "cancel all enqueue failed: " + e);
+        return fail(c, "UNAVAILABLE");
+    }
+    return zokor.no_store(zokor.json_response(202, zokor.jobj()
+        .set_str("market_id", market_id)
+        .set_str("command_id", receipt.command_ref)
+        .set_str("status", "CANCEL_ALL_PENDING")
+        .set_bool("existing", receipt.existing).render()));
+}
+
 
 fn cancel_order(c: zokor.Ctx[app.App]) -> http.Response {
     if !exchange.valid_uuid(c.param("id")) { return fail(c,"BAD_REQUEST"); }
@@ -61,13 +82,45 @@ fn admission_response(c: zokor.Ctx[app.App],receipt: exchange.AdmissionReceipt) 
 fn order_json(order: exchange.ReadOrder) -> zokor.Json {
     let fee=0;
     if order.fee_paid { fee=1; }
-    let body=zokor.jobj().set_str("order_id",order.order_id).set_str("market_id",order.market_id)
-        .set_str("status",order.status).set_str("outcome",order.outcome).set_str("side",order.side)
-        .set_int("price",order.price).set_int("qty",order.qty).set_int("remaining",order.remaining)
-        .set_int("filled",order.filled).set_int("cancelled",order.cancelled)
-        .set_int("accepted_seq",order.accepted_seq).set_bool("fee_paid",order.fee_paid)
-        .set_int("filled_qty",order.filled).set_int("principal",order.principal).set_int("fee_charged",fee)
-        .set_str("created_at",order.created_at);
+    let status_label = "Waiting to match";
+    if order.filled > 0 { status_label = "Partly filled"; }
+    let cancellable = order.status == "OPEN" || order.status == "PARTIAL";
+
+    let held_sedi = 0;
+    let held_shares = 0;
+    if order.side == "BUY" {
+        let fee_rem = 0;
+        if !order.fee_paid { fee_rem = 1; }
+        held_sedi = order.remaining * order.price + fee_rem;
+    } else {
+        held_shares = order.remaining;
+    }
+
+    let held_obj = zokor.jobj().set_int("sedi", held_sedi).set_int("shares", held_shares);
+
+    let body=zokor.jobj()
+        .set_str("id", order.order_id)
+        .set_str("order_id",order.order_id)
+        .set_str("market", order.market_id)
+        .set_str("market_id",order.market_id)
+        .set_str("status",order.status)
+        .set_str("status_label", status_label)
+        .set_str("outcome",order.outcome)
+        .set_str("side",order.side)
+        .set_int("price",order.price)
+        .set_int("qty",order.qty)
+        .set_int("remaining",order.remaining)
+        .set_int("filled",order.filled)
+        .set_int("cancelled",order.cancelled)
+        .set_int("accepted_seq",order.accepted_seq)
+        .set_bool("fee_paid",order.fee_paid)
+        .set_int("filled_qty",order.filled)
+        .set_int("principal",order.principal)
+        .set_int("fee_charged",fee)
+        .set("held", held_obj)
+        .set_str("placed_at", order.created_at)
+        .set_str("created_at",order.created_at)
+        .set_bool("cancellable", cancellable);
     if order.filled>0 { body.set_float("avg_price",(order.principal as float)/(order.filled as float)); }
     else { body.set("avg_price",zokor.jnull()); }
     if order.request_type=="market" { body.set_int("protection_limit",order.price); }

@@ -51,6 +51,35 @@ gc struct ChangePasswordDto {
     new_password: str
 }
 
+gc struct ChangeUsernameDto {
+    username: str,
+    hold_id: str
+}
+
+gc struct RequestEmailChangeDto {
+    new_email: str
+}
+
+gc struct VerifyEmailChangeDto {
+    change_token: str,
+    code: str
+}
+
+gc struct Verify2faDto {
+    code: str
+}
+
+gc struct DeleteMeDto {
+    password: opt[str],
+    otp: opt[str]
+}
+
+gc struct RoleAdminDto {
+    username: str,
+    role: str,
+    reason: str
+}
+
 fn user_json(a: domain.Account, changeable_at: timez.Time) -> zokor.Json {
     return zokor.jobj()
         .set_str("id", a.id)

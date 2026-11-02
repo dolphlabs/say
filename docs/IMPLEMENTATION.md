@@ -9,8 +9,8 @@ existing PRDs/designs, subject to explicit review gates in each prompt.
 | 02 Ledger/seasons | Existing implementation; integration extensions required |
 | 03 Market registry | Implemented registry; cross-module seed/approval integration remains |
 | 04 Matching core | Implemented; final verification/reporting in progress |
-| 05 Exchange runtime | In progress; design approved 2026-10-27 |
-| 06 Live feed | Pending |
+| 05 Exchange runtime | Implemented and verified; PR #2 open |
+| 06 Live feed | Implemented and verified (WebSockets, bounded queue, 64 shard readers, client library) |
 | 07 Portfolio/notifications | Pending |
 | 08 Resolution/settlement | Pending |
 | 09 Treasury/bots | Pending |

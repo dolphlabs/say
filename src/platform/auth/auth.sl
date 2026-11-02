@@ -30,6 +30,25 @@ pub fn require_session(c: zokor.Ctx[app.App]) -> opt[http.Response] {
     return none;
 }
 
+// Public routes that personalise for a signed-in caller: an absent, expired
+// or unreadable session serves the anonymous view instead of failing.
+pub fn optional_session(c: zokor.Ctx[app.App]) -> opt[http.Response] {
+    let token = session_token(c);
+    if len(token) == 0 {
+        return none;
+    }
+    let r = app.authenticate(c.state, token);
+    guard let found = r else let e = err_of(r) {
+        c.state.settings.server.logger.warn("auth", "optional session lookup failed: " + e);
+        return none;
+    }
+    if let caller = found {
+        c.set_local("account_id", caller.account_id);
+        c.set_local("session_hash", caller.session_hash);
+    }
+    return none;
+}
+
 pub fn session_cookie(token: str, max_age_seconds: int) -> zokor.Cookie {
     let ck = zokor.new_cookie(cookie_name(), token);
     ck.path = "/";
@@ -67,4 +86,10 @@ pub fn require_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
 
 pub fn require_super_admin(c: zokor.Ctx[app.App]) -> opt[http.Response] {
     return require_role(c, "super_admin");
+}
+
+pub fn has_recent_totp(c: zokor.Ctx[app.App], account_id: str) -> bool {
+    let session_hash = c.local("session_hash");
+    if session_hash == "" { return false; }
+    return app.has_recent_totp(c.state, session_hash, account_id);
 }

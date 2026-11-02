@@ -47,3 +47,34 @@ export type {
   StreamEnvelope,
   SubscribeOperation,
 } from "./protocol.js";
+
+export {
+  computeMark,
+  computePositionValuation,
+  computeSummaryValuation,
+} from "./valuation.js";
+export type {
+  Outcome,
+  MarkSource,
+  Rational,
+  PositionValuationInput,
+  PositionValuationResult,
+  SummaryValuationInput,
+  SummaryValuationResult,
+} from "./valuation.js";
+
+export { NotificationStore } from "./notification-store.js";
+export type {
+  NotificationItem,
+  NotificationState,
+  NotificationListener,
+} from "./notification-store.js";
+
+export { PortfolioLive } from "./portfolio-live.js";
+export type {
+  PortfolioSummary,
+  PositionItem,
+  PortfolioLiveState,
+  PortfolioLiveListener,
+  PortfolioLiveOptions,
+} from "./portfolio-live.js";

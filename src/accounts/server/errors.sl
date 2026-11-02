@@ -21,6 +21,10 @@ fn register_errors(r: zokor.Registry) {
     zokor.register(r, "GOOGLE_FAILED", 502, "Google sign-in did not work. Try again.");
     zokor.register(r, "PENDING_EXPIRED", 410, "That step expired. Start again.");
     zokor.register(r, "LAST_SIGN_IN_METHOD", 409, "Set a password before unlinking Google.");
+    zokor.register(r, "USERNAME_CHANGE_WINDOW_CLOSED", 400, "You can change your username only during the first 72 hours of a new season.");
+    zokor.register(r, "USERNAME_ALREADY_CHANGED_THIS_SEASON", 400, "You have already changed your username this season.");
+    zokor.register(r, "INVALID_CODE", 400, "That code is invalid or expired.");
+    zokor.register(r, "FORBIDDEN", 403, "Insufficient permissions for this action.");
 }
 
 fn code_of(why: accounts.Why) -> str {
