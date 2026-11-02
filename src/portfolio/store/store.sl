@@ -136,10 +136,11 @@ fn st_read_positions(s: PostgresPortfolioStore, account_id: str, season_ordinal:
         "coalesce(w.free_units, p.qty) as qty_free, " +
         "coalesce(w.held_units, 0) as qty_in_orders, " +
         "p.cost_basis, " +
-        "coalesce(m.proposed_outcome, '') as proposed_outcome, " +
-        "(m.proposed_outcome is not null) as has_proposed_outcome " +
+        "coalesce(mr.proposed_outcome, '') as proposed_outcome, " +
+        "(mr.proposed_outcome is not null) as has_proposed_outcome " +
         "from positions p " +
         "join markets m on m.id = p.market_id " +
+        "left join market_resolutions mr on mr.market_id = m.id " +
         "left join categories c on c.id = m.category_id " +
         "join seasons s on s.id = p.season_id " +
         "left join wallets w on w.season_id = p.season_id and w.account_id = p.account_id " +

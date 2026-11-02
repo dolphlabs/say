@@ -738,32 +738,22 @@ input[type='number']::-webkit-outer-spin-button {
 .logo-mark {
   width: 34px;
   height: 34px;
-  border-radius: 10px;
-  background: var(--lime);
-  color: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--display);
-  font-weight: 800;
-  font-size: 18px;
+  display: block;
 }
 
 .logo-word {
-  font-family: var(--display);
-  font-weight: 800;
-  font-size: 24px;
-  letter-spacing: -0.04em;
+  height: 30px;
+  width: auto;
+  display: block;
 }
 
 .logo.compact .logo-mark {
   width: 32px;
   height: 32px;
-  font-size: 17px;
 }
 
 .logo.compact .logo-word {
-  font-size: 22px;
+  height: 28px;
 }
 
 /* site header */
@@ -3245,12 +3235,10 @@ p.warn {
 .admin-logo .logo-mark {
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  font-size: 16px;
 }
 
 .admin-logo .logo-word {
-  font-size: 20px;
+  height: 26px;
 }
 
 .admin-tag {

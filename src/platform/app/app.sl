@@ -41,7 +41,8 @@ import "../../approvals/store" as approvals_store;
 
 pub gc struct Postman {
     email: email.Email,
-    from: str
+    from: str,
+    app_url: str
 }
 
 pub gc struct App {
@@ -92,20 +93,28 @@ pub fn new_uuid() -> str {
 
 fn send_mail(p: Postman, m: accounts.Mail) -> result[bool, str] {
     let subject = "Finish signing up for say";
-    let html = templates.verify_email_html(m.username, m.code);
-    let text = templates.verify_email_text(m.username, m.code);
+    let r = templates.Recipient { username: m.username, to: m.to, app_url: p.app_url };
+    let html = templates.verify_email_html(r, m.code);
+    let text = templates.verify_email_text(r, m.code);
     if m.purpose == "reset_password" {
         subject = "Your code to get back into say";
-        html = templates.reset_password_html(m.username, m.code);
-        text = templates.reset_password_text(m.username, m.code);
+        html = templates.reset_password_html(r, m.code);
+        text = templates.reset_password_text(r, m.code);
     }
     return email.send(p.email, email.EmailMessage {
         from: p.from, to: [m.to], subject: subject, html: html, text: text, tags: [m.purpose]
     });
 }
 
-pub fn mailer_on(e: email.Email, from: str) -> accounts.Mailer[Postman] {
-    return accounts.Mailer[Postman] { context: Postman { email: e, from: from }, send: send_mail };
+fn without_trailing_slash(u: str) -> str {
+    if strings.has_suffix(u, "/") {
+        return strings.slice(u, 0, len(u) - 1);
+    }
+    return u;
+}
+
+pub fn mailer_on(e: email.Email, from: str, app_url: str) -> accounts.Mailer[Postman] {
+    return accounts.Mailer[Postman] { context: Postman { email: e, from: from, app_url: without_trailing_slash(app_url) }, send: send_mail };
 }
 
 fn email_for(s: config.Settings) -> email.Email {
@@ -229,7 +238,7 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         runtime_views_lock: runtime_views_lock,
         snapshot_queue: snapshot_queue,
         reply_slots: make_chan(s.exchange.max_waiters),
-        mailer: mailer_on(mail, s.email.from),
+        mailer: mailer_on(mail, s.email.from, s.auth.app_url),
         settings: s,
         metrics: metrics.new_registry(),
         db: some(d),

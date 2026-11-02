@@ -1,3 +1,4 @@
+import "strings";
 import "zokor";
 import "../config" as config;
 import "../email" as email;
@@ -22,7 +23,7 @@ fn test_should_carry_settings_into_the_auth_config() {
 
 fn test_should_render_verify_and_reset_mail_by_purpose() {
     let mem = email.in_memory();
-    let m = mailer_on(mem, "say <verify@say.test>");
+    let m = mailer_on(mem, "say <verify@say.test>", "https://say.test/");
     let send = m.send;
     let a = send(m.context, accounts_mail("x@say.test", "verify_email"));
     let b = send(m.context, accounts_mail("y@say.test", "reset_password"));
@@ -32,6 +33,8 @@ fn test_should_render_verify_and_reset_mail_by_purpose() {
     assert(len(sent) == 2);
     assert(sent[0].subject == "Finish signing up for say");
     assert(sent[1].subject == "Your code to get back into say");
+    assert(strings.contains(sent[0].html, "https://say.test/brand/"));
+    assert(strings.contains(sent[1].html, "Sent to y@say.test"));
 }
 
 fn test_should_make_distinct_v4_uuids() {

@@ -62,8 +62,8 @@ export function AdminShell({ section, children }: { section: Section; children: 
     <div className="admin">
       <aside className="admin-nav" aria-label="Admin navigation">
         <Link to="/" className="admin-logo">
-          <span className="logo-mark">s</span>
-          <span className="logo-word">say</span>
+          <img className="logo-mark" src="/brand/svg/mark.svg" alt="" />
+          <img className="logo-word" src="/brand/svg/wordmark-white.svg" alt="say" />
           <span className="admin-tag">ADMIN</span>
         </Link>
         <nav aria-label="Admin">

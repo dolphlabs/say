@@ -6,8 +6,8 @@ import { remaining } from '../format'
 export function Logo({ compact = false, to = '/' }: { compact?: boolean; to?: string }) {
   return (
     <Link to={to} className={compact ? 'logo compact' : 'logo'} aria-label="say home">
-      <span className="logo-mark">s</span>
-      <span className="logo-word">say</span>
+      <img className="logo-mark" src="/brand/svg/mark.svg" alt="" />
+      <img className="logo-word" src="/brand/svg/wordmark-white.svg" alt="say" />
     </Link>
   )
 }
