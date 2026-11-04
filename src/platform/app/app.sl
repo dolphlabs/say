@@ -382,10 +382,11 @@ pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
         if let d = a.db {
             let h = encoding.hex_encode(crypto.sha256(to_bytes(token)));
             let lk = db.lookup_bot_key(d, h, until_of(time.mono() + 2000000000));
-            if let found_opt = lk {
-                if let bot_id = found_opt {
-                    return ok(some(Caller { account_id: bot_id, session_hash: h }));
-                }
+            guard let found_opt = lk else let e = err_of(lk) {
+                return err(e);
+            }
+            if let bot_id = found_opt {
+                return ok(some(Caller { account_id: bot_id, session_hash: h }));
             }
         }
         return ok(none_caller);
