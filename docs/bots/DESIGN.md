@@ -505,6 +505,14 @@ To match the UI design specifications:
 - `POST /v1/admin/treasury/season-budget` `{ "season": "...", "amount": 750000, "reason": "..." }`
 - `POST /v1/internal/bots/heartbeat` (bot API key; the bot is the key's owner, see 3.1)
 
+### Provisioning and funding
+
+- `say admin bot create --username <name>` makes a `BOT` account (no password or email, off the leaderboard, in the house beneficial-owner group so house bots never trade with each other) and prints its API key once; only the key's SHA-256 is stored.
+- `say admin bot key --bot <uuid>` issues a new key and revokes every earlier one.
+- `say admin bot assign --bot <uuid> --market <uuid>` adds the bot to an approved or open market, paused with nothing allocated.
+- Money moves only through approvals. `POST /v1/admin/treasury/season-budget` asks for a season's bot budget (two approvers); `POST .../topup` asks for an allocation (one approver, not the requester). A worker applies approved requests every 10 seconds: in one transaction it rechecks the approval's payload hash and the season budget with the season's bot rows locked, posts `BOT_FUNDING` from issuance to the bot's wallet (keyed by the top-up, so it posts once) and raises the allocation. Rejected, stale or expired requests are closed with the reason.
+- Orders placed with a bot key are admitted as `owner_kind = bot` with the house group, so they hold and settle against the bot's wallet.
+
 Pausing a bot (one market or all) sets the pause first, then enqueues a `CancelAll` through the exchange's command queue for each market where the bot has admitted, open or partially filled orders. The pause holds if a cancel fails; the call answers `503 treasury.cancel_failed` and is safe to repeat.
 
 ---

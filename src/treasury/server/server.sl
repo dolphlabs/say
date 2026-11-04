@@ -211,14 +211,22 @@ fn topup_handler(c: zokor.Ctx[app.App]) -> http.Response {
     guard let body = dr else let bad = err_of(dr) {
         return bad;
     }
-    let res = treasury_svc.topup_budget(c.state.treasury, "", bot_id, market_id, body.amount, c.local("account_id"), body.reason);
-    guard let _ok = res else let e = err_of(res) {
-        if e == "BUDGET_CAP_EXCEEDED" {
-            return zokor.respond(c.errors, "treasury.budget_cap_exceeded", c.request_id);
-        }
-        return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
+    let res = treasury_svc.topup_budget(c.state.treasury, bot_id, market_id, body.amount, c.local("account_id"), body.reason);
+    guard let req = res else let e = err_of(res) {
+        return funding_failure(c, "top-up", e);
     }
-    return zokor.ok_json("{\"ok\":true}");
+    return zokor.accepted(funding_json(req, "topup_id").render());
+}
+
+fn funding_failure(c: zokor.Ctx[app.App], what: str, e: str) -> http.Response {
+    if e == "INVALID_FUNDING" {
+        return zokor.respond(c.errors, "treasury.bad_request", c.request_id);
+    }
+    if e == "NOT_FOUND" || e == "SEASON_NOT_FOUND" {
+        return zokor.respond(c.errors, "treasury.not_found", c.request_id);
+    }
+    c.state.settings.server.logger.error("treasury", what + " request failed: " + e);
+    return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
 }
 
 fn season_budget_handler(c: zokor.Ctx[app.App]) -> http.Response {
@@ -230,10 +238,10 @@ fn season_budget_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return bad;
     }
     let res = treasury_svc.propose_season_budget(c.state.treasury, body.season, body.amount, c.local("account_id"), body.reason);
-    guard let appr_id = res else let e = err_of(res) {
-        return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
+    guard let req = res else let e = err_of(res) {
+        return funding_failure(c, "season budget", e);
     }
-    return zokor.created("{\"approval_id\":\"" + appr_id + "\"}", "/v1/admin/approvals/" + appr_id);
+    return zokor.accepted(funding_json(req, "budget_id").render());
 }
 
 fn heartbeat_handler(c: zokor.Ctx[app.App]) -> http.Response {

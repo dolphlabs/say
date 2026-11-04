@@ -27,6 +27,8 @@ pub fn require_session(c: zokor.Ctx[app.App]) -> opt[http.Response] {
     }
     c.set_local("account_id", caller.account_id);
     c.set_local("session_hash", caller.session_hash);
+    c.set_local("owner_kind", caller.owner_kind);
+    c.set_local("owner_group", caller.owner_group);
     return none;
 }
 
@@ -45,6 +47,8 @@ pub fn optional_session(c: zokor.Ctx[app.App]) -> opt[http.Response] {
     if let caller = found {
         c.set_local("account_id", caller.account_id);
         c.set_local("session_hash", caller.session_hash);
+        c.set_local("owner_kind", caller.owner_kind);
+        c.set_local("owner_group", caller.owner_group);
     }
     return none;
 }

@@ -693,6 +693,16 @@ pub fn post_many_encoded(c: pg.Conn, txs: [domain.LedgerTx], d: until) -> result
     return ok(results);
 }
 
+// Posts an approved bot top-up inside the caller's transaction; a replay of
+// the same top-up posts nothing new.
+pub fn post_bot_funding(c: pg.Conn, bot_id: str, season_id: str, market_id: str, topup_id: str, amount: int, d: until) -> result[bool, str] {
+    let posted = post_many_encoded(c, [domain.bot_funding_tx(bot_id, season_id, market_id, topup_id, amount)], d);
+    guard let _p = posted else let e = err_of(posted) {
+        return err(e);
+    }
+    return ok(true);
+}
+
 pub gc struct OrderHolds {
     sedi_hold_id: str,
     share_hold_id: str

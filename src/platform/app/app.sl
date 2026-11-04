@@ -396,7 +396,9 @@ pub fn market_roles(a: App, id: str) -> result[[str], str] {
 // without knowing the accounts feature.
 pub gc struct Caller {
     account_id: str,
-    session_hash: str
+    session_hash: str,
+    owner_kind: str,
+    owner_group: str
 }
 
 pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
@@ -408,8 +410,8 @@ pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
             guard let found_opt = lk else let e = err_of(lk) {
                 return err(e);
             }
-            if let bot_id = found_opt {
-                return ok(some(Caller { account_id: bot_id, session_hash: h }));
+            if let key = found_opt {
+                return ok(some(Caller { account_id: key.bot_id, session_hash: h, owner_kind: "bot", owner_group: key.owner_group }));
             }
         }
         return ok(none_caller);
@@ -421,7 +423,7 @@ pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
     guard let s = found else {
         return ok(none_caller);
     }
-    return ok(some(Caller { account_id: s.account_id, session_hash: encoding.hex_encode(s.token_hash) }));
+    return ok(some(Caller { account_id: s.account_id, session_hash: encoding.hex_encode(s.token_hash), owner_kind: "user", owner_group: "" }));
 }
 
 fn drain_problems(a: App) -> int {
@@ -586,6 +588,7 @@ pub fn start_workers(a: App) {
     start_stream_workers(a);
     spawn run_closing_soon_scheduler(a);
     spawn run_notice_email_worker(a);
+    spawn run_funding_worker(a);
     spawn run_resolution_watchers(a);
     spawn standings_svc.run_standings_worker(a.standings);
 }
@@ -605,6 +608,23 @@ fn run_closing_soon_scheduler(a: App) -> int {
         guard let _n = r else let e = err_of(r) {
             a.settings.server.logger.error("notifications", e);
             continue;
+        }
+    }
+    return 0;
+}
+
+// Applies approved bot top-ups and season budgets; every check that can
+// refuse one runs again inside the transaction that moves the money.
+fn run_funding_worker(a: App) -> int {
+    while true {
+        time.sleep(10000000000);
+        let r = treasury.apply_funding(a.treasury);
+        guard let report = r else let e = err_of(r) {
+            a.settings.server.logger.error("treasury", "funding round failed: " + e);
+            continue;
+        }
+        for p in report.problems {
+            a.settings.server.logger.warn("treasury", p);
         }
     }
     return 0;

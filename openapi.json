@@ -1231,7 +1231,7 @@
           "Treasury & Bots"
         ],
         "summary": "Top up bot budget",
-        "description": "Allocates additional play-money budget to a bot on a market from the season treasury reserve.",
+        "description": "Requests a top-up of the bot's allocation on this market. Nothing moves yet: another operator with the treasury or super_admin role approves it in the approvals inbox, and the funding worker then applies it within ten seconds. It checks the season's applied bot budget, posts BOT_FUNDING from issuance to the bot's wallet, and raises the allocation, all in one transaction. A top-up that would exceed the budget, or that has no approved budget for its season, is closed as REJECTED with the reason.",
         "operationId": "topupBotBudget",
         "security": [
           {
@@ -1284,23 +1284,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Budget augmented",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
           "400": {
-            "description": "Season budget cap exceeded",
+            "description": "Amount not positive, too large, or reason over 500 characters (treasury.bad_request)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1311,6 +1296,50 @@
           },
           "403": {
             "description": "Treasury or admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Request recorded; nothing moves until it is approved and applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "topup_id",
+                    "approval_ids",
+                    "status"
+                  ],
+                  "properties": {
+                    "topup_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "approval_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "PENDING_APPROVAL"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such bot assignment or season (treasury.not_found)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3244,7 +3273,7 @@
           "Approvals"
         ],
         "summary": "Propose season treasury budget",
-        "description": "Submits a season-wide treasury allocation proposal into the governance approvals inbox.",
+        "description": "Requests a season's bot budget cap. It creates two approval requests, one per slot, and applies only when two different operators other than the requester approve them. The latest applied budget is the season's cap.",
         "operationId": "proposeSeasonBudget",
         "security": [
           {
@@ -3282,31 +3311,62 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Proposal queued for approval",
-            "headers": {
-              "Location": {
+          "403": {
+            "description": "Treasury role required",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
-            },
+            }
+          },
+          "202": {
+            "description": "Request recorded; nothing moves until it is approved and applied",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "budget_id",
+                    "approval_ids",
+                    "status"
+                  ],
                   "properties": {
-                    "approval_id": {
+                    "budget_id": {
                       "type": "string",
                       "format": "uuid"
+                    },
+                    "approval_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "PENDING_APPROVAL"
+                      ]
                     }
                   }
                 }
               }
             }
           },
-          "403": {
-            "description": "Treasury role required",
+          "400": {
+            "description": "Amount not positive, too large, or reason over 500 characters (treasury.bad_request)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such bot assignment or season (treasury.not_found)",
             "content": {
               "application/json": {
                 "schema": {

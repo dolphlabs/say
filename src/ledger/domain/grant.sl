@@ -56,6 +56,23 @@ pub fn grant_tx(account_id: str, season_id: str, amount: int) -> LedgerTx {
     };
 }
 
+// Funds a bot from issuance once per approved top-up: the business key is
+// the top-up, so applying it twice posts once.
+pub fn bot_funding_tx(bot_id: str, season_id: str, market_id: str, topup_id: str, amount: int) -> LedgerTx {
+    let none_holds: [HoldOp] = [];
+    return LedgerTx {
+        business_key: "bot_topup:" + topup_id,
+        kind: "BOT_FUNDING",
+        season_id: season_id,
+        market_id: market_id,
+        ref_type: "bot_topup",
+        ref_id: topup_id,
+        metadata: "{}",
+        entries: [free(issuance(), sedi(), 0 - amount), free(bot(bot_id), sedi(), amount)],
+        holds: none_holds
+    };
+}
+
 pub gc struct HoldInfo {
     id: str,
     owner: Owner,
