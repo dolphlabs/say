@@ -359,8 +359,10 @@ The bot runner is a standalone daemon binary executing concurrently with the exc
 1. **Market Worker Tasks**: One spawned Slang task per active `(bot_id, market_id)`. The task maintains local order state, receives stream updates, and runs `quote()` on every tick (1 Hz) or significant book event.
 2. **WebSocket Ingestion Task**: A single multiplexed WebSocket client connecting to `/v1/stream` with API key authentication. It tracks sequence numbers and outbox deltas. If a sequence gap or disconnect occurs, it instantly sets `stream_degraded = true`, which pulls quotes until resynchronized.
 3. **Order Client Pool**: Bounded HTTP client workers issuing `Place`, `Cancel`, and `CancelAll` requests to the core exchange API. Every `Place` request carries a deterministic `Idempotency-Key` (e.g. `bot:{bot_id}:{market_id}:{level}:{hash}`).
-4. **Heartbeat Worker**: Every 2 seconds, posts operational status to `POST /v1/internal/bots/heartbeat`:
+4. **Heartbeat Worker**: Every 2 seconds, posts operational status to `POST /v1/internal/bots/heartbeat`, signed in with the bot's API key:
    - Bot status label, current inventory (`yes`, `no`), budget utilized, spread, and last quote timestamp.
+   - The bot is the key's owner; the body names only the market. A bot can report `QUOTING` or a `PULLED_*` state, never a pause, and an operator's `PAUSED_MANUAL` or global `PAUSED_ALL` is kept whatever it reports.
+   - The reply is `{ "status": ... }`, the status in force after pauses; the runner stops quoting on anything but `QUOTING`.
 5. **Decision Log Batcher**: Receives `bot_decisions` records over a bounded channel (`chan[BotDecision]`, capacity 1,000) and commits them to Postgres every 500 ms in a single batch insert.
 6. **Pause Watcher**: Subscribes to Redis/WebSocket broadcast channel `bots.pause` for instant kill-switch signals.
 
@@ -500,7 +502,9 @@ To match the UI design specifications:
 - `PATCH /v1/admin/bots/{bot_id}/markets/{market_id}/params` `{ "params": { ... }, "version": 2 }`
 - `POST /v1/admin/bots/{bot_id}/markets/{market_id}/topup` `{ "amount": 25000, "reason": "..." }`
 - `POST /v1/admin/treasury/season-budget` `{ "season": "...", "amount": 750000, "reason": "..." }`
-- `POST /v1/internal/bots/heartbeat` (Authenticated via Bot API Key)
+- `POST /v1/internal/bots/heartbeat` (bot API key; the bot is the key's owner, see 3.1)
+
+Pausing a bot (one market or all) sets the pause first, then enqueues a `CancelAll` through the exchange's command queue for each market where the bot has admitted, open or partially filled orders. The pause holds if a cancel fails; the call answers `503 treasury.cancel_failed` and is safe to repeat.
 
 ---
 

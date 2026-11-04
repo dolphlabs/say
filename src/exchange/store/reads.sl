@@ -38,6 +38,21 @@ gc struct CandleRow {
     volume: int
 }
 
+gc struct MarketIdRow {
+    market_id: str
+}
+
+fn st_read_open_markets(postgres: Postgres, account_id: str) -> result[[str],str] {
+    let rows:result[[MarketIdRow],str]=zokor.query_all(postgres.pool,
+        "select distinct market_id::text as market_id from orders "+
+        "where account_id=$1::uuid and status in ('ADMITTED','OPEN','PARTIAL') order by 1",
+        [pg.arg_text(account_id)],deadline(postgres));
+    guard let found=rows else let e=err_of(rows) { return err(e); }
+    let out:[str]=[];
+    for r in found { push(out,r.market_id); }
+    return ok(out);
+}
+
 fn st_read_order(postgres: Postgres, account_id: str, order_id: str) -> result[opt[service.ReadOrder],str] {
     let rows:result[[OrderRow],str]=zokor.query_all(postgres.pool,
         "select o.id::text as order_id,o.market_id::text as market_id,o.status,o.outcome,o.side,o.limit_price as price,"+

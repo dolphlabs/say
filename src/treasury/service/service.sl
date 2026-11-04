@@ -27,12 +27,15 @@ pub fn list_decisions[C](s: TreasuryService[C], bot_id: str, market_id: str, lim
     return (s.store.list_decisions)(s.store.context, bot_id, market_id, lim);
 }
 
-pub fn pause_bot[C](s: TreasuryService[C], bot_id: str, market_id: str, reason: str) -> result[bool, str] {
+pub fn pause_bot[C, Q](s: TreasuryService[C], orders: BotOrders[Q], bot_id: str, market_id: str, reason: str) -> result[bool, str] {
     let res = (s.store.set_status)(s.store.context, bot_id, market_id, "PAUSED_MANUAL", reason);
     guard let _ok = res else let e = err_of(res) {
         return err(e);
     }
-    let _cancelled = (s.store.cancel_bot_orders)(s.store.context, bot_id, market_id);
+    let pulled = pull_quotes(orders, bot_id, market_id);
+    guard let _n = pulled else let e = err_of(pulled) {
+        return err(e);
+    }
     return ok(true);
 }
 
@@ -40,13 +43,57 @@ pub fn resume_bot[C](s: TreasuryService[C], bot_id: str, market_id: str, reason:
     return (s.store.set_status)(s.store.context, bot_id, market_id, "QUOTING", reason);
 }
 
-pub fn pause_all_bots[C](s: TreasuryService[C], reason: str) -> result[bool, str] {
+pub fn pause_all_bots[C, Q](s: TreasuryService[C], orders: BotOrders[Q], reason: str) -> result[bool, str] {
     let res = (s.store.set_all_paused)(s.store.context, true, reason);
     guard let _ok = res else let e = err_of(res) {
         return err(e);
     }
-    let _cancelled = (s.store.cancel_all_bots_orders)(s.store.context);
+    let ids_res = (s.store.bot_ids)(s.store.context);
+    guard let ids = ids_res else let e = err_of(ids_res) {
+        return err("CANCEL_FAILED: " + e);
+    }
+    let failed = 0;
+    let first = "";
+    for bot_id in ids {
+        let pulled = pull_quotes(orders, bot_id, "");
+        guard let _n = pulled else let e = err_of(pulled) {
+            failed += 1;
+            if len(first) == 0 { first = e; }
+            continue;
+        }
+    }
+    if failed > 0 {
+        return err(first);
+    }
     return ok(true);
+}
+
+// Every market is attempted even after a failure, so one stuck market never
+// leaves the bot quoting everywhere else. "" means all of the bot's markets.
+fn pull_quotes[Q](orders: BotOrders[Q], bot_id: str, only_market: str) -> result[int, str] {
+    let open_res = (orders.open_markets)(orders.context, bot_id);
+    guard let open = open_res else let e = err_of(open_res) {
+        return err("CANCEL_FAILED: " + e);
+    }
+    let cancelled = 0;
+    let failed = 0;
+    let first = "";
+    for market_id in open {
+        if len(only_market) > 0 && market_id != only_market {
+            continue;
+        }
+        let r = (orders.cancel_all)(orders.context, market_id, bot_id);
+        if let _ok = r {
+            cancelled += 1;
+        } else let e = err_of(r) {
+            failed += 1;
+            if len(first) == 0 { first = market_id + ": " + e; }
+        }
+    }
+    if failed > 0 {
+        return err("CANCEL_FAILED: " + to_str(failed) + " market(s), first " + first);
+    }
+    return ok(cancelled);
 }
 
 pub fn resume_all_bots[C](s: TreasuryService[C], reason: str) -> result[bool, str] {
@@ -104,7 +151,13 @@ pub fn propose_season_budget[C](
     return (s.store.propose_season_budget)(s.store.context, season_id, amount, operator_id, reason);
 }
 
-pub fn record_heartbeat[C](s: TreasuryService[C], payload: domain.HeartbeatPayload) -> result[bool, str] {
+// The bot reports what it is doing, never that it is paused: pauses are an
+// operator's decision, and the store keeps them whatever a heartbeat says.
+pub fn record_heartbeat[C](s: TreasuryService[C], payload: domain.HeartbeatPayload) -> result[str, str] {
+    if len(payload.market_id) != 36 || !domain.bot_reportable_status(payload.status) || len(payload.status_reason) > 200 ||
+       payload.used < 0 || payload.holding_yes < 0 || payload.holding_no < 0 || payload.spread_ticks < 0 {
+        return err("INVALID_HEARTBEAT");
+    }
     return (s.store.record_heartbeat)(s.store.context, payload);
 }
 

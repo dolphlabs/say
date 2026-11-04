@@ -763,7 +763,7 @@
           "Treasury & Bots"
         ],
         "summary": "Pause all bots globally",
-        "description": "Emergency circuit breaker: cancels resting bot orders across all markets and suspends bot operations.",
+        "description": "Emergency circuit breaker: pauses every bot, then enqueues a CancelAll through the exchange in every market where a bot has open orders. Every market is attempted even if one fails; any failure answers 503 treasury.cancel_failed, and the call is safe to repeat.",
         "operationId": "pauseAllBots",
         "security": [
           {
@@ -805,6 +805,16 @@
           },
           "403": {
             "description": "Treasury or admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused, but not every open order could be cancelled (treasury.cancel_failed); pause again to retry. Or the service is unavailable (treasury.unavailable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1045,7 +1055,7 @@
           "Treasury & Bots"
         ],
         "summary": "Pause bot on market",
-        "description": "Immediately cancels resting orders and pauses the bot from quoting on a specific market.",
+        "description": "Pauses the bot on this market, then enqueues a CancelAll through the exchange for the bot's open orders there (admitted, open and partially filled). The pause holds even if the cancel fails; the call then answers 503 treasury.cancel_failed and is safe to repeat.",
         "operationId": "pauseBotMarket",
         "security": [
           {
@@ -1106,6 +1116,26 @@
           },
           "403": {
             "description": "Treasury or admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such bot assignment (treasury.not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Paused, but not every open order could be cancelled (treasury.cancel_failed); pause again to retry. Or the service is unavailable (treasury.unavailable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3990,7 +4020,7 @@
           "Treasury & Bots"
         ],
         "summary": "Bot daemon heartbeat",
-        "description": "Internal status heartbeat sent periodically by background bot quoting processes.",
+        "description": "Status heartbeat from a bot runner, signed in with that bot's API key (`Authorization: Bearer say_bot_...`). The bot is the key's owner, so a bot can only report on itself. A bot cannot report a pause, and an operator's pause (manual or global) is kept whatever the heartbeat says. The reply is the status in force after those pauses; a runner stops quoting on anything but QUOTING.",
         "operationId": "recordBotHeartbeat",
         "requestBody": {
           "required": true,
@@ -4004,22 +4034,64 @@
         },
         "responses": {
           "200": {
-            "description": "Heartbeat recorded",
+            "description": "Heartbeat recorded; the bot's status in force",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "required": [
+                    "status"
+                  ],
                   "properties": {
-                    "ok": {
-                      "type": "boolean"
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "QUOTING",
+                        "PULLED_STALE",
+                        "PULLED_CAP",
+                        "PULLED_DRAWDOWN",
+                        "PULLED_MARKET",
+                        "PAUSED_MANUAL",
+                        "PAUSED_ALL"
+                      ]
                     }
                   }
                 }
               }
             }
           },
+          "400": {
+            "description": "Invalid heartbeat (treasury.bad_request): unknown or pause status, negative figures, or a malformed market id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot key or session (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The caller has no bot assignment on this market (treasury.not_found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "Service temporarily unavailable",
+            "description": "Service temporarily unavailable (treasury.unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4028,7 +4100,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "BearerSession": []
+          }
+        ]
       }
     },
     "/v1/leaderboard": {
@@ -7909,7 +7986,6 @@
       "BotHeartbeatRequest": {
         "type": "object",
         "required": [
-          "bot_id",
           "market_id",
           "status",
           "holding_yes",
@@ -7918,30 +7994,39 @@
           "spread_ticks"
         ],
         "properties": {
-          "bot_id": {
-            "type": "string"
-          },
           "market_id": {
             "type": "string",
             "format": "uuid"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "QUOTING",
+              "PULLED_STALE",
+              "PULLED_CAP",
+              "PULLED_DRAWDOWN",
+              "PULLED_MARKET"
+            ]
           },
           "status_reason": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 200
           },
           "holding_yes": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           },
           "holding_no": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           },
           "used": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           },
           "spread_ticks": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
           }
         },
         "additionalProperties": false

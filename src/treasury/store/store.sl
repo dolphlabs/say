@@ -249,8 +249,11 @@ fn pg_save_decisions(s: PostgresTreasuryStore, records: [domain.BotDecisionRecor
 fn pg_set_status(s: PostgresTreasuryStore, bot_id: str, market_id: str, status: str, reason: str) -> result[bool, str] {
     let q = "update bot_markets set status = $1, status_reason = $2, updated_at = now() where bot_id = $3::uuid and market_id = $4::uuid";
     let res = exec_sql(s.pool, q, [pg.arg_text(status), pg.arg_text(reason), pg.arg_text(bot_id), pg.arg_text(market_id)], pg_deadline());
-    guard let _n = res else let e = err_of(res) {
+    guard let n = res else let e = err_of(res) {
         return err(e);
+    }
+    if n == 0 {
+        return err("NOT_FOUND");
     }
     return ok(true);
 }
@@ -385,37 +388,43 @@ fn pg_propose_season_budget(s: PostgresTreasuryStore, season: str, amt: int, op:
     return err("insert failed");
 }
 
-fn pg_record_heartbeat(s: PostgresTreasuryStore, p: domain.HeartbeatPayload) -> result[bool, str] {
-    let q = "update bot_markets set used = $1, status = $2, status_reason = $3, last_quote_at = now() where bot_id = $4::uuid and market_id = $5::uuid";
-    let res = exec_sql(s.pool, q, [pg.arg_int(p.used), pg.arg_text(p.status), pg.arg_text(p.status_reason), pg.arg_text(p.bot_id), pg.arg_text(p.market_id)], pg_deadline());
-    guard let _n = res else let e = err_of(res) {
-        return err(e);
-    }
-    return ok(true);
+gc struct StatusRow {
+    status: str
 }
 
-fn pg_cancel_bot_orders(s: PostgresTreasuryStore, bot_id: str, market_id: str) -> result[int, str] {
-    let q = "insert into market_commands (id, market_id, seq, kind, account_id, status) " +
-            "values (gen_random_uuid(), $1::uuid, (select coalesce(max(seq), 0) + 1 from market_commands where market_id = $1::uuid), 'CancelAll', $2::uuid, 'ENQUEUED')";
-    let res = exec_sql(s.pool, q, [pg.arg_text(market_id), pg.arg_text(bot_id)], pg_deadline());
-    guard let n = res else let e = err_of(res) {
-        return err(e);
-    }
-    return ok(n);
-}
-
-fn pg_cancel_all_bots_orders(s: PostgresTreasuryStore) -> result[int, str] {
-    let empty_args: [pg.Arg] = [];
-    let res: result[[BotOverviewRow], str] = zokor.query_all(s.pool, "select bot_id::text, '' as name, market_id::text, '' as question, 0 as budget, 0 as used, 0 as holding_yes, 0 as holding_no, 0 as spread_ticks, 0 as last_quote_age_ms, '' as status, 0 as params_version from bot_markets", empty_args, pg_deadline());
+// A paused row stays paused whatever the bot reports, and a bot that
+// reports during a global pause is moved to PAUSED_ALL rather than QUOTING.
+fn pg_record_heartbeat(s: PostgresTreasuryStore, p: domain.HeartbeatPayload) -> result[str, str] {
+    let q = "update bot_markets set used = $1, " +
+            "status = case when status in ('PAUSED_MANUAL','PAUSED_ALL') then status " +
+            "when coalesce((select h.bots_paused from trading_halt h where h.id = 1), false) then 'PAUSED_ALL' else $2 end, " +
+            "status_reason = case when status in ('PAUSED_MANUAL','PAUSED_ALL') " +
+            "or coalesce((select h.bots_paused from trading_halt h where h.id = 1), false) then status_reason else $3 end, " +
+            "last_quote_at = now(), updated_at = now() " +
+            "where bot_id = $4::uuid and market_id = $5::uuid returning status";
+    let res: result[[StatusRow], str] = zokor.query_all(s.pool, q,
+        [pg.arg_int(p.used), pg.arg_text(p.status), pg.arg_text(p.status_reason), pg.arg_text(p.bot_id), pg.arg_text(p.market_id)],
+        pg_deadline());
     guard let rows = res else let e = err_of(res) {
         return err(e);
     }
-    let total = 0;
-    for r in rows {
-        let cr = pg_cancel_bot_orders(s, r.bot_id, r.market_id);
-        if let n = cr { total += n; }
+    if len(rows) != 1 {
+        return err("NOT_FOUND");
     }
-    return ok(total);
+    return ok(rows[0].status);
+}
+
+fn pg_bot_ids(s: PostgresTreasuryStore) -> result[[str], str] {
+    let empty_args: [pg.Arg] = [];
+    let res: result[[TextRow], str] = zokor.query_all(s.pool, "select distinct bot_id::text as val from bot_markets order by 1", empty_args, pg_deadline());
+    guard let rows = res else let e = err_of(res) {
+        return err(e);
+    }
+    let out: [str] = [];
+    for r in rows {
+        push(out, r.val);
+    }
+    return ok(out);
 }
 
 pub fn treasury_store(s: PostgresTreasuryStore) -> service.TreasuryStore[PostgresTreasuryStore] {
@@ -433,7 +442,6 @@ pub fn treasury_store(s: PostgresTreasuryStore) -> service.TreasuryStore[Postgre
         topup_budget: pg_topup_budget,
         propose_season_budget: pg_propose_season_budget,
         record_heartbeat: pg_record_heartbeat,
-        cancel_bot_orders: pg_cancel_bot_orders,
-        cancel_all_bots_orders: pg_cancel_all_bots_orders
+        bot_ids: pg_bot_ids
     };
 }

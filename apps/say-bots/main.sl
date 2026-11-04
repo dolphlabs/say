@@ -22,6 +22,32 @@ fn send_post(client: httpc.Client, url: str, token: str, body: str, idem_key: st
     return ok(resp.status);
 }
 
+gc struct HeartbeatReply {
+    status: str
+}
+
+// The server's answer is the bot's status after the operator's pauses are
+// applied; the runner stops quoting on anything but QUOTING.
+fn send_heartbeat(client: httpc.Client, url: str, token: str, body: str) -> result[str, str] {
+    let req = httpc.new_request("POST", url);
+    req.headers["Authorization"] = "Bearer " + token;
+    req.headers["Content-Type"] = "application/json";
+    req.body = builder.new_bytes().write_str(body).finish();
+    let r = client.send(req, until_of(time.mono() + 3000000000));
+    guard let resp = r else let e = err_of(r) {
+        return err(e);
+    }
+    let text = strings.from_bytes(resp.body, 0, len(resp.body));
+    if resp.status != 200 {
+        return err("heartbeat " + to_str(resp.status) + ": " + text);
+    }
+    let decoded: result[HeartbeatReply, str] = json.decode(text);
+    guard let reply = decoded else let e = err_of(decoded) {
+        return err("heartbeat reply: " + e);
+    }
+    return ok(reply.status);
+}
+
 fn send_delete(client: httpc.Client, url: str, token: str) -> result[int, str] {
     let req = httpc.new_request("DELETE", url);
     req.headers["Authorization"] = "Bearer " + token;
@@ -60,6 +86,7 @@ let live_orders: [domain.LiveOrder] = [];
 
 let last_heartbeat_at = time.mono();
 let last_quote_at = 0;
+let server_status = "QUOTING";
 let loops = 0;
 
 println("[say-bots] Starting bot runner for bot " + bot_id + " on market " + market_id);
@@ -86,8 +113,8 @@ while true {
             recent_fills: [],
             market_status: "OPEN",
             trading_halted: false,
-            global_pause: false,
-            manual_pause: false,
+            global_pause: server_status == "PAUSED_ALL",
+            manual_pause: server_status == "PAUSED_MANUAL",
             season_drawdown: 0,
             now_ms: now_ms
         };
@@ -141,9 +168,17 @@ while true {
 
     // 2. Heartbeat tick (every 2s)
     if (now_mono - last_heartbeat_at) >= 2000000000 {
-        let hb_body = "{\"bot_id\":\"" + bot_id + "\",\"market_id\":\"" + market_id + "\",\"status\":\"QUOTING\",\"status_reason\":\"normal\",\"holding_yes\":" + to_str(inventory.yes_qty) + ",\"holding_no\":" + to_str(inventory.no_qty) + ",\"used\":" + to_str(inventory.cost_yes + inventory.cost_no) + ",\"spread_ticks\":3}";
+        let hb_body = "{\"market_id\":\"" + market_id + "\",\"status\":\"QUOTING\",\"status_reason\":\"normal\",\"holding_yes\":" + to_str(inventory.yes_qty) + ",\"holding_no\":" + to_str(inventory.no_qty) + ",\"used\":" + to_str(inventory.cost_yes + inventory.cost_no) + ",\"spread_ticks\":3}";
         let hb_url = api_url + "/v1/internal/bots/heartbeat";
-        let _ = send_post(client, hb_url, api_key, hb_body, "");
+        let hb = send_heartbeat(client, hb_url, api_key, hb_body);
+        if let st = hb {
+            if st != server_status {
+                println("[say-bots] server status " + st);
+            }
+            server_status = st;
+        } else let e = err_of(hb) {
+            println("[say-bots] " + e);
+        }
         last_heartbeat_at = now_mono;
     }
 

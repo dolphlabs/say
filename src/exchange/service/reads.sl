@@ -15,6 +15,14 @@ pub fn read_orders[C](store: ReadStore[C], account_id: str, market_id: str, stat
     return read(store.context,account_id,market_id,status,after_id,limit);
 }
 
+// Markets where the account still has an order that could rest or fill,
+// admitted ones included: a cancel that skips them leaves live orders behind.
+pub fn read_open_markets[C](store: ReadStore[C], account_id: str) -> result[[str],str] {
+    if !valid_uuid(account_id) { return err("INVALID_READ_REQUEST"); }
+    let read=store.open_markets;
+    return read(store.context,account_id);
+}
+
 pub fn read_trades[C](store: ReadStore[C], market_id: str, before_seq: int,
                       before_index: int, limit: int) -> result[ReadTradesPage,str] {
     if !valid_uuid(market_id) || before_seq<0 || before_index<0 || limit<1 || limit>100 {
