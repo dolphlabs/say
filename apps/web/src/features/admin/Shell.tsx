@@ -5,10 +5,11 @@ import { get, type Page } from '../../api'
 import { hasRole, isStaff, roleLabel, useMe, type Role, type User } from '../../session'
 import { Empty, Loading } from '../../ui/kit'
 
-export type Section = 'markets' | 'resolution' | 'treasury' | 'approvals'
+export type Section = 'markets' | 'sources' | 'resolution' | 'treasury' | 'approvals'
 
 export const SECTION_ROLES: Record<Section, Role[]> = {
   markets: ['creator', 'curator', 'admin', 'super_admin'],
+  sources: ['curator', 'super_admin'],
   resolution: ['resolver', 'super_admin'],
   treasury: ['treasury', 'admin', 'super_admin'],
   approvals: ['creator', 'curator', 'treasury', 'resolver', 'analyst', 'admin', 'settler', 'super_admin'],
@@ -16,6 +17,7 @@ export const SECTION_ROLES: Record<Section, Role[]> = {
 
 const LABELS: Record<Section, string> = {
   markets: 'Markets',
+  sources: 'Sources',
   resolution: 'Resolution',
   treasury: 'Treasury & bots',
   approvals: 'Approvals & audit',
