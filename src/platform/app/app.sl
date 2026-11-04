@@ -334,11 +334,13 @@ pub fn public_market_exists(a: App, market_id: str) -> result[bool,str] {
     return ok(false);
 }
 
-pub fn get_portfolio_market_stats(a: App) -> map[str]portfolio_svc.MarketPriceStats {
+// Prices for valuing positions. Without them every position would be
+// valued at nothing, so a failed snapshot is an error, not an empty map.
+pub fn get_portfolio_market_stats(a: App) -> result[map[str]portfolio_svc.MarketPriceStats, str] {
     let out: map[str]portfolio_svc.MarketPriceStats = {};
     let snap_res = markets.snapshot(a.markets);
-    guard let snap = snap_res else {
-        return out;
+    guard let snap = snap_res else let f = err_of(snap_res) {
+        return err("market snapshot: " + inspect(f));
     }
     for item in snap.stats {
         let has_last = false;
@@ -368,7 +370,7 @@ pub fn get_portfolio_market_stats(a: App) -> map[str]portfolio_svc.MarketPriceSt
             has_best_ask: has_ask
         };
     }
-    return out;
+    return ok(out);
 }
 
 pub fn build(s: config.Settings, d: db.Db, c: cache.Cache) -> result[App, str] {
@@ -591,7 +593,7 @@ pub fn start_workers(a: App) {
     spawn run_funding_worker(a);
     spawn run_deletion_worker(a);
     spawn run_resolution_watchers(a);
-    spawn standings_svc.run_standings_worker(a.standings);
+    spawn run_standings_worker(a);
 }
 
 fn run_resolution_watchers(a: App) -> int {
@@ -664,6 +666,20 @@ fn run_deletion_worker(a: App) -> int {
                 a.settings.server.logger.error("accounts", "deletion " + id + ": anonymising failed: " + e);
             }
         }
+    }
+    return 0;
+}
+
+// The refresh time is stored as when a profit was reached, the leaderboard's
+// tie-break, so it is wall-clock time shared by every node and restart.
+fn run_standings_worker(a: App) -> int {
+    while true {
+        let r = standings_svc.refresh_snapshot(a.standings, (time.wall() / 1000000) as int);
+        if let _ok = r {
+        } else let e = err_of(r) {
+            a.settings.server.logger.error("standings", "refresh failed: " + e);
+        }
+        time.sleep(30000000000);
     }
     return 0;
 }

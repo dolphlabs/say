@@ -142,12 +142,17 @@ fn get_portfolio_summary(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "BAD_REQUEST", c.request_id);
     }
 
-    let stats_map = app.get_portfolio_market_stats(c.state);
+    let stats_res = app.get_portfolio_market_stats(c.state);
+    guard let stats_map = stats_res else let e = err_of(stats_res) {
+        c.state.settings.server.logger.error("portfolio", "summary prices: " + e);
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
     let r = portfolio.get_summary(c.state.portfolio, account_id, ordinal, stats_map);
     guard let summary = r else let e = err_of(r) {
         if e == "SEASON_NOT_FOUND" {
             return zokor.respond(c.errors, "SEASON_NOT_FOUND", c.request_id);
         }
+        c.state.settings.server.logger.error("portfolio", "summary: " + e);
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
 
@@ -161,12 +166,17 @@ fn get_positions_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "BAD_REQUEST", c.request_id);
     }
 
-    let stats_map = app.get_portfolio_market_stats(c.state);
+    let stats_res = app.get_portfolio_market_stats(c.state);
+    guard let stats_map = stats_res else let e = err_of(stats_res) {
+        c.state.settings.server.logger.error("portfolio", "positions prices: " + e);
+        return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
+    }
     let r = portfolio.get_positions(c.state.portfolio, account_id, ordinal, stats_map);
     guard let positions = r else let e = err_of(r) {
         if e == "SEASON_NOT_FOUND" {
             return zokor.respond(c.errors, "SEASON_NOT_FOUND", c.request_id);
         }
+        c.state.settings.server.logger.error("portfolio", "positions: " + e);
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
 
@@ -189,6 +199,7 @@ fn get_results_handler(c: zokor.Ctx[app.App]) -> http.Response {
         if e == "SEASON_NOT_FOUND" {
             return zokor.respond(c.errors, "SEASON_NOT_FOUND", c.request_id);
         }
+        c.state.settings.server.logger.error("portfolio", "results: " + e);
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
 

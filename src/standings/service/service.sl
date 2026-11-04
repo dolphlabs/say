@@ -1,4 +1,3 @@
-import "time";
 import "../domain" as domain;
 
 pub gc struct StandingsService[C] {
@@ -149,13 +148,4 @@ pub fn get_strip[C](svc: StandingsService[C]) -> result[[domain.StandingsRow], s
         }
     }
     return ok(strip);
-}
-
-pub fn run_standings_worker[C](svc: StandingsService[C]) -> int {
-    while true {
-        let now_ms = (time.mono() / 1000000) as int;
-        let _ = refresh_snapshot(svc, now_ms);
-        time.sleep(30000000000); // 30 seconds
-    }
-    return 0;
 }
