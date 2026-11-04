@@ -13,7 +13,7 @@ pub gc struct TreasuryStore[C] {
     get_params: fn(C, str, str) -> result[opt[domain.BotParams], str],
     topup_budget: fn(C, str, str, str, int, str, str) -> result[bool, str],
     propose_season_budget: fn(C, str, int, str, str) -> result[str, str],
-    record_heartbeat: fn(C, domain.HeartbeatPayload) -> result[str, str],
+    record_heartbeat: fn(C, domain.HeartbeatPayload) -> result[domain.BotDirective, str],
     bot_ids: fn(C) -> result[[str], str]
 }
 

@@ -160,20 +160,21 @@ fn test_should_keep_an_operator_pause_whatever_a_heartbeat_reports() {
 
     let manual = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000002", "QUOTING"));
     guard let kept = manual else let e = err_of(manual) { panic(e); }
-    assert(kept == "PAUSED_MANUAL", kept);
+    assert(kept.status == "PAUSED_MANUAL", kept.status);
+    assert(!kept.trading_halted);
     assert(read_test_value(db.owner, "select status_reason as val from bot_markets where bot_id='00000000-0000-4000-8000-000000000002'") == "operator pause");
     assert(read_test_value(db.owner, "select used::text as val from bot_markets where bot_id='00000000-0000-4000-8000-000000000002'") == "40");
 
     run_test_sql(db.owner, "update trading_halt set bots_paused=true where id=1");
     let global = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000003", "QUOTING"));
     guard let held = global else let e = err_of(global) { panic(e); }
-    assert(held == "PAUSED_ALL", held);
+    assert(held.status == "PAUSED_ALL", held.status);
 
     run_test_sql(db.owner, "update trading_halt set bots_paused=false where id=1");
     run_test_sql(db.owner, "update bot_markets set status='PULLED_STALE' where bot_id='00000000-0000-4000-8000-000000000003'");
     let free = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000003", "QUOTING"));
     guard let quoting = free else let e = err_of(free) { panic(e); }
-    assert(quoting == "QUOTING", quoting);
+    assert(quoting.status == "QUOTING", quoting.status);
 
     let stranger = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000001", "QUOTING"));
     if let _s = stranger { panic("a heartbeat for a bot with no row was accepted"); }

@@ -153,12 +153,23 @@ pub fn propose_season_budget[C](
 
 // The bot reports what it is doing, never that it is paused: pauses are an
 // operator's decision, and the store keeps them whatever a heartbeat says.
-pub fn record_heartbeat[C](s: TreasuryService[C], payload: domain.HeartbeatPayload) -> result[str, str] {
+pub fn record_heartbeat[C](s: TreasuryService[C], payload: domain.HeartbeatPayload) -> result[domain.BotDirective, str] {
     if len(payload.market_id) != 36 || !domain.bot_reportable_status(payload.status) || len(payload.status_reason) > 200 ||
        payload.used < 0 || payload.holding_yes < 0 || payload.holding_no < 0 || payload.spread_ticks < 0 {
         return err("INVALID_HEARTBEAT");
     }
-    return (s.store.record_heartbeat)(s.store.context, payload);
+    let recorded = (s.store.record_heartbeat)(s.store.context, payload);
+    guard let d = recorded else let e = err_of(recorded) {
+        return err(e);
+    }
+    let params_res = (s.store.get_params)(s.store.context, payload.bot_id, payload.market_id);
+    guard let found = params_res else let e = err_of(params_res) {
+        return err(e);
+    }
+    if let p = found {
+        d.params = p;
+    }
+    return ok(d);
 }
 
 pub fn save_decisions[C](s: TreasuryService[C], records: [domain.BotDecisionRecord]) -> result[bool, str] {

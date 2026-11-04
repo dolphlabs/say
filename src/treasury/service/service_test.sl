@@ -109,8 +109,10 @@ pub fn test_should_reject_a_heartbeat_that_claims_a_pause_or_has_bad_numbers() {
     let svc = fake_treasury_service(f);
     let market = "00000000-0000-4000-a000-000000000200";
     let ok_res = record_heartbeat(svc, heartbeat(market, "QUOTING", 0));
-    guard let status = ok_res else { panic("valid heartbeat refused"); }
-    assert(status == "QUOTING");
+    guard let directive = ok_res else { panic("valid heartbeat refused"); }
+    assert(directive.status == "QUOTING");
+    assert(directive.allocated == 5000);
+    assert(directive.params.levels == domain.default_params().levels);
 
     for bad in [heartbeat(market, "PAUSED_MANUAL", 0), heartbeat(market, "PAUSED_ALL", 0),
                 heartbeat(market, "QUOTING", -1), heartbeat("not-a-market", "QUOTING", 0)] {

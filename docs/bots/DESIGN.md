@@ -362,7 +362,8 @@ The bot runner is a standalone daemon binary executing concurrently with the exc
 4. **Heartbeat Worker**: Every 2 seconds, posts operational status to `POST /v1/internal/bots/heartbeat`, signed in with the bot's API key:
    - Bot status label, current inventory (`yes`, `no`), budget utilized, spread, and last quote timestamp.
    - The bot is the key's owner; the body names only the market. A bot can report `QUOTING` or a `PULLED_*` state, never a pause, and an operator's `PAUSED_MANUAL` or global `PAUSED_ALL` is kept whatever it reports.
-   - The reply is `{ "status": ... }`, the status in force after pauses; the runner stops quoting on anything but `QUOTING`.
+   - The reply is the bot's directive: `status` (in force after pauses), `allocated`, `trading_halted`, `params_version` and `params`. The runner stops quoting on anything but `QUOTING`, and also when it has not had a successful heartbeat for 10 seconds.
+   - Each quote round the runner reads the market (status, redemption units, price band, opening price), the book (best bid/ask, last price, freshness), its positions, its balance and its open orders from the API, so a restart or a fill never leaves it working from stale memory. Each placement gets a unique idempotency key, and on shutdown it cancels its quotes in that market.
 5. **Decision Log Batcher**: Receives `bot_decisions` records over a bounded channel (`chan[BotDecision]`, capacity 1,000) and commits them to Postgres every 500 ms in a single batch insert.
 6. **Pause Watcher**: Subscribes to Redis/WebSocket broadcast channel `bots.pause` for instant kill-switch signals.
 

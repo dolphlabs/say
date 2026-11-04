@@ -96,10 +96,10 @@ fn fake_propose_season_budget(f: FakeTreasuryStore, season: str, amt: int, op: s
     return ok("appr_fake_123");
 }
 
-fn fake_record_heartbeat(f: FakeTreasuryStore, p: domain.HeartbeatPayload) -> result[str, str] {
+fn fake_record_heartbeat(f: FakeTreasuryStore, p: domain.HeartbeatPayload) -> result[domain.BotDirective, str] {
     push(f.calls, "heartbeat " + p.bot_id + " " + p.market_id + " " + p.status);
     if len(f.failure) > 0 { return err(f.failure); }
-    return ok(p.status);
+    return ok(domain.BotDirective { status: p.status, allocated: 5000, trading_halted: false, params_version: 3, params: domain.default_params() });
 }
 
 fn fake_bot_ids(f: FakeTreasuryStore) -> result[[str], str] {

@@ -388,21 +388,25 @@ fn pg_propose_season_budget(s: PostgresTreasuryStore, season: str, amt: int, op:
     return err("insert failed");
 }
 
-gc struct StatusRow {
-    status: str
+gc struct HeartbeatRow {
+    status: str,
+    allocated: int,
+    params_version: int,
+    trading_halted: bool
 }
 
 // A paused row stays paused whatever the bot reports, and a bot that
 // reports during a global pause is moved to PAUSED_ALL rather than QUOTING.
-fn pg_record_heartbeat(s: PostgresTreasuryStore, p: domain.HeartbeatPayload) -> result[str, str] {
+fn pg_record_heartbeat(s: PostgresTreasuryStore, p: domain.HeartbeatPayload) -> result[domain.BotDirective, str] {
     let q = "update bot_markets set used = $1, " +
             "status = case when status in ('PAUSED_MANUAL','PAUSED_ALL') then status " +
             "when coalesce((select h.bots_paused from trading_halt h where h.id = 1), false) then 'PAUSED_ALL' else $2 end, " +
             "status_reason = case when status in ('PAUSED_MANUAL','PAUSED_ALL') " +
             "or coalesce((select h.bots_paused from trading_halt h where h.id = 1), false) then status_reason else $3 end, " +
             "last_quote_at = now(), updated_at = now() " +
-            "where bot_id = $4::uuid and market_id = $5::uuid returning status";
-    let res: result[[StatusRow], str] = zokor.query_all(s.pool, q,
+            "where bot_id = $4::uuid and market_id = $5::uuid " +
+            "returning status, allocated, params_version, coalesce((select h.halted from trading_halt h where h.id = 1), false) as trading_halted";
+    let res: result[[HeartbeatRow], str] = zokor.query_all(s.pool, q,
         [pg.arg_int(p.used), pg.arg_text(p.status), pg.arg_text(p.status_reason), pg.arg_text(p.bot_id), pg.arg_text(p.market_id)],
         pg_deadline());
     guard let rows = res else let e = err_of(res) {
@@ -411,7 +415,11 @@ fn pg_record_heartbeat(s: PostgresTreasuryStore, p: domain.HeartbeatPayload) -> 
     if len(rows) != 1 {
         return err("NOT_FOUND");
     }
-    return ok(rows[0].status);
+    let r = rows[0];
+    return ok(domain.BotDirective {
+        status: r.status, allocated: r.allocated, trading_halted: r.trading_halted,
+        params_version: r.params_version, params: domain.default_params()
+    });
 }
 
 fn pg_bot_ids(s: PostgresTreasuryStore) -> result[[str], str] {

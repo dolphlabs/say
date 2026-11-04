@@ -229,3 +229,18 @@ pub fn test_worst_case_loss_pulled_cap() {
         assert(o.side == "SELL" && o.outcome == "YES", "only sell YES allowed to de-risk");
     }
 }
+
+fn test_should_take_the_reference_price_from_the_last_trade_then_the_book_then_the_open() {
+    let none_i: opt[int] = none;
+    assert(reference_price(some(61), some(40), some(44), 50) == 61);
+    assert(reference_price(none_i, some(40), some(44), 50) == 42);
+    assert(reference_price(none_i, some(40), none_i, 50) == 50);
+    assert(reference_price(none_i, none_i, none_i, 55) == 55);
+}
+
+fn test_should_round_a_holding_cost_up() {
+    assert(holding_cost(3, 10, 3) == 10);
+    assert(holding_cost(3, 11, 3) == 11);
+    assert(holding_cost(2, 5, 3) == 4);
+    assert(holding_cost(0, 50, 1) == 0);
+}

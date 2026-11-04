@@ -4034,13 +4034,17 @@
         },
         "responses": {
           "200": {
-            "description": "Heartbeat recorded; the bot's status in force",
+            "description": "Heartbeat recorded; what the bot must obey",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "required": [
-                    "status"
+                    "status",
+                    "allocated",
+                    "trading_halted",
+                    "params_version",
+                    "params"
                   ],
                   "properties": {
                     "status": {
@@ -4054,6 +4058,55 @@
                         "PAUSED_MANUAL",
                         "PAUSED_ALL"
                       ]
+                    },
+                    "allocated": {
+                      "type": "integer",
+                      "description": "Sedis allocated to this bot on this market"
+                    },
+                    "trading_halted": {
+                      "type": "boolean"
+                    },
+                    "params_version": {
+                      "type": "integer"
+                    },
+                    "params": {
+                      "type": "object",
+                      "description": "Current quoting parameters (defaults when none are set)",
+                      "properties": {
+                        "base_spread_ticks": {
+                          "type": "integer"
+                        },
+                        "vol_ticks": {
+                          "type": "integer"
+                        },
+                        "skew_ticks": {
+                          "type": "integer"
+                        },
+                        "levels": {
+                          "type": "integer"
+                        },
+                        "base_size": {
+                          "type": "integer"
+                        },
+                        "max_net_shares": {
+                          "type": "integer"
+                        },
+                        "max_loss": {
+                          "type": "integer"
+                        },
+                        "season_max_drawdown": {
+                          "type": "integer"
+                        },
+                        "min_requote_ms": {
+                          "type": "integer"
+                        },
+                        "max_ops_per_sec": {
+                          "type": "integer"
+                        },
+                        "max_open_orders": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   }
                 }

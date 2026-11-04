@@ -252,7 +252,7 @@ fn heartbeat_handler(c: zokor.Ctx[app.App]) -> http.Response {
         spread_ticks: body.spread_ticks
     };
     let res = treasury_svc.record_heartbeat(c.state.treasury, payload);
-    guard let status = res else let e = err_of(res) {
+    guard let d = res else let e = err_of(res) {
         if e == "INVALID_HEARTBEAT" {
             return zokor.respond(c.errors, "treasury.bad_request", c.request_id);
         }
@@ -262,5 +262,5 @@ fn heartbeat_handler(c: zokor.Ctx[app.App]) -> http.Response {
         c.state.settings.server.logger.warn("treasury", "heartbeat error: " + e);
         return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
     }
-    return zokor.ok_json(zokor.jobj().set_str("status", status).render());
+    return zokor.ok_json(directive_json(d).render());
 }
