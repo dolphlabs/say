@@ -5,6 +5,7 @@ import "strings";
 import "time";
 import "zokor";
 import "../service" as service;
+import "../../notifications/store" as notifications_store;
 
 gc struct IntValRow {
     n: int
@@ -233,9 +234,32 @@ pub fn revoke_role_direct(s: Store, account_id: str, role: str) -> result[bool, 
     return ok(true);
 }
 
-pub fn open_markets_for_account(s: Store, account_id: str) -> result[[str], str] {
-    let q = "select distinct market_id::text as id from orders where account_id = $1::uuid and status in ('OPEN', 'PARTIAL')";
-    let r: result[[IdRow], str] = zokor.query_all(s.pg, q, [pg.arg_text(account_id)], pg_until());
+// Fences the account at once: it can no longer sign in or trade, and
+// every session ends. The hashes come back so cached sessions go too.
+fn begin_deletion_tx(c: pg.Conn, account_id: str) -> result[[bytes], str] {
+    let marked = pg.query(c,
+        "update accounts set status = 'DELETING', deletion_requested_at = coalesce(deletion_requested_at, now()) " +
+        "where id = $1::uuid and kind = 'USER' and status <> 'DELETED'",
+        [pg.arg_text(account_id)], pg_until());
+    guard let _m = marked else let e = err_of(marked) { return err(e); }
+    let r: result[[TokenHashRow], str] = zokor.conn_query_all(c,
+        "delete from sessions where account_id = $1::uuid returning token_hash", [pg.arg_text(account_id)], pg_until());
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    let out: [bytes] = [];
+    for row in rows {
+        push(out, row.token_hash);
+    }
+    return ok(out);
+}
+
+pub fn begin_deletion(s: Store, account_id: str) -> result[[bytes], str] {
+    return zokor.transaction(s.pg, account_id, begin_deletion_tx, pg_until());
+}
+
+pub fn deleting_accounts(s: Store, limit: int) -> result[[str], str] {
+    let r: result[[IdRow], str] = zokor.query_all(s.pg,
+        "select id::text as id from accounts where status = 'DELETING' order by deletion_requested_at limit $1",
+        [pg.arg_int(limit)], pg_until());
     guard let rows = r else let e = err_of(r) { return err(e); }
     let out: [str] = [];
     for row in rows {
@@ -244,31 +268,58 @@ pub fn open_markets_for_account(s: Store, account_id: str) -> result[[str], str]
     return ok(out);
 }
 
-pub fn anonymise_account(s: Store, account_id: str, anon_username: str, anon_email: str) -> result[[bytes], str] {
-    let q1 = "update accounts set " +
-        "  status = 'DELETED', " +
-        "  username = $1, " +
-        "  email = $2, " +
-        "  password_hash = null, " +
-        "  google_sub = null, " +
-        "  phone = null, " +
-        "  avatar_url = null, " +
-        "  leaderboard_eligible = false, " +
-        "  deleted_at = coalesce(deleted_at, now()) " +
-        "where id = $3::uuid";
-    let r1 = pg.pool_query(s.pg, q1, [pg.arg_text(anon_username), pg.arg_text(anon_email), pg.arg_text(account_id)], pg_until());
-    guard let _ok1 = r1 else let e1 = err_of(r1) { return err(e1); }
+gc struct AnonArg {
+    account_id: str,
+    anon_username: str
+}
 
-    let _ = pg.pool_query(s.pg, "delete from notification_preferences where account_id = $1::uuid", [pg.arg_text(account_id)], pg_until());
+gc struct OldEmailRow {
+    email: str
+}
 
-    let r_sess: result[[TokenHashRow], str] = zokor.query_all(s.pg, "delete from sessions where account_id = $1::uuid returning token_hash", [pg.arg_text(account_id)], pg_until());
-    let out: [bytes] = [];
-    if let rows = r_sess {
-        for row in rows {
-            push(out, row.token_hash);
-        }
+// One transaction: either every personal detail goes and the account is
+// DELETED, or nothing changes and the worker tries again. Ledger history,
+// positions and audit events stay, attached to the anonymous account.
+fn anonymise_tx(c: pg.Conn, a: AnonArg) -> result[bool, str] {
+    let locked: result[[OldEmailRow], str] = zokor.conn_query_all(c,
+        "select coalesce(email::text, '') as email from accounts where id = $1::uuid and status = 'DELETING' for update",
+        [pg.arg_text(a.account_id)], pg_until());
+    guard let rows = locked else let e = err_of(locked) { return err(e); }
+    if len(rows) != 1 { return ok(false); }
+    for sql in [
+        "delete from password_credentials where account_id = $1::uuid",
+        "delete from auth_identities where account_id = $1::uuid",
+        "delete from sessions where account_id = $1::uuid",
+        "delete from session_totp_proofs where account_id = $1::uuid",
+        "delete from otp_codes where account_id = $1::uuid",
+        "delete from signup_tokens where account_id = $1::uuid",
+        "delete from email_changes where account_id = $1::uuid",
+        "delete from account_totp where account_id = $1::uuid",
+        "delete from pending_totp where account_id = $1::uuid",
+        "delete from username_reservations where account_id = $1::uuid",
+        "delete from username_history where account_id = $1::uuid",
+        "delete from account_devices where account_id = $1::uuid"
+    ] {
+        let r = pg.query(c, sql, [pg.arg_text(a.account_id)], pg_until());
+        guard let _n = r else let e = err_of(r) { return err(e); }
     }
-    return ok(out);
+    if len(rows[0].email) > 0 {
+        let sends = pg.query(c, "delete from otp_sends where email = $1::citext", [pg.arg_text(rows[0].email)], pg_until());
+        guard let _n = sends else let e = err_of(sends) { return err(e); }
+    }
+    let notices = notifications_store.forget_account(c, a.account_id, pg_until());
+    guard let _f = notices else let e = err_of(notices) { return err(e); }
+    let done = pg.query(c,
+        "update accounts set status = 'DELETED', username = $2, email = null, email_verified_at = null, " +
+        "phone_number = null, avatar_url = null, leaderboard_eligible = false, beneficial_owner_group = null, " +
+        "deleted_at = coalesce(deleted_at, now()) where id = $1::uuid",
+        [pg.arg_text(a.account_id), pg.arg_text(a.anon_username)], pg_until());
+    guard let _d = done else let e = err_of(done) { return err(e); }
+    return ok(true);
+}
+
+pub fn anonymise_account(s: Store, account_id: str, anon_username: str) -> result[bool, str] {
+    return zokor.transaction(s.pg, AnonArg { account_id: account_id, anon_username: anon_username }, anonymise_tx, pg_until());
 }
 
 pub fn set_avatar_url(s: Store, account_id: str, url: opt[str]) -> result[bool, str] {
@@ -299,7 +350,8 @@ pub fn settings_store(s: Store) -> service.SettingsStore[Store] {
         find_account_id_by_username: find_account_id_by_username,
         grant_role_direct: grant_role_direct,
         revoke_role_direct: revoke_role_direct,
-        open_markets_for_account: open_markets_for_account,
+        begin_deletion: begin_deletion,
+        deleting_accounts: deleting_accounts,
         anonymise_account: anonymise_account,
         set_avatar_url: set_avatar_url
     };

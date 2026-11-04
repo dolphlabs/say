@@ -444,6 +444,20 @@ fn st_email_retry(s: PostgresNotificationStore, id: str, why: str, delay: int) -
     return ok(true);
 }
 
+// For account deletion, inside the accounts transaction: notices, pending
+// and sent emails (which keep an address) and preferences go with the account.
+pub fn forget_account(c: pg.Conn, account_id: str, d: until) -> result[bool, str] {
+    for sql in [
+        "delete from notifications where account_id = $1::uuid",
+        "delete from notification_prefs where account_id = $1::uuid",
+        "delete from email_outbox where account_id = $1::uuid"
+    ] {
+        let r = pg.query(c, sql, [pg.arg_text(account_id)], d);
+        guard let _n = r else let e = err_of(r) { return err(e); }
+    }
+    return ok(true);
+}
+
 pub fn make_postgres_notification_store(pool: pg.Pool) -> service.NotificationStore[PostgresNotificationStore] {
     let s = PostgresNotificationStore { pool: pool };
     return service.NotificationStore[PostgresNotificationStore] {

@@ -589,6 +589,7 @@ pub fn start_workers(a: App) {
     spawn run_closing_soon_scheduler(a);
     spawn run_notice_email_worker(a);
     spawn run_funding_worker(a);
+    spawn run_deletion_worker(a);
     spawn run_resolution_watchers(a);
     spawn standings_svc.run_standings_worker(a.standings);
 }
@@ -625,6 +626,43 @@ fn run_funding_worker(a: App) -> int {
         }
         for p in report.problems {
             a.settings.server.logger.warn("treasury", p);
+        }
+    }
+    return 0;
+}
+
+// Finishes deletions: cancels a deleting account's live orders through the
+// exchange and anonymises it only once none remain. Anything that fails is
+// logged and retried on the next round.
+fn run_deletion_worker(a: App) -> int {
+    while true {
+        time.sleep(15000000000);
+        let r = accounts.deleting_accounts(a.accounts, 50);
+        guard let ids = r else let e = err_of(r) {
+            a.settings.server.logger.error("accounts", "listing deletions failed: " + e);
+            continue;
+        }
+        for id in ids {
+            let open = exchange.read_open_markets(a.exchange_reads, id);
+            guard let markets_open = open else let e = err_of(open) {
+                a.settings.server.logger.error("accounts", "deletion " + id + ": reading orders failed: " + e);
+                continue;
+            }
+            if len(markets_open) > 0 {
+                for m in markets_open {
+                    let c = exchange.enqueue_cancel_all(a.command_queue, m, id, new_uuid());
+                    if let _q = c {
+                    } else let e = err_of(c) {
+                        a.settings.server.logger.warn("accounts", "deletion " + id + ": cancel in " + m + " failed: " + e);
+                    }
+                }
+                continue;
+            }
+            let done = accounts.finish_deletion(a.accounts, id);
+            if let _d = done {
+            } else let e = err_of(done) {
+                a.settings.server.logger.error("accounts", "deletion " + id + ": anonymising failed: " + e);
+            }
         }
     }
     return 0;

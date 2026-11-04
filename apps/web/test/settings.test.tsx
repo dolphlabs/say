@@ -32,10 +32,27 @@ describe('account settings', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Current password is incorrect.')
   })
 
-  it('should keep account deletion disabled', async () => {
-    stubFetch(() => [])
+  it('should delete the account only after the username is typed', async () => {
+    const fetcher = stubFetch((url, init) => (url === '/v1/me' && init?.method === 'DELETE' ? json({ status: 'DELETING' }, 202) : []))
     renderWithApp(() => <Settings user={user} />)
-    expect((await screen.findByRole('button', { name: 'Delete account' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete account' }))
+    const confirm = screen.getByRole('button', { name: 'Delete my account' }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: 'someone-else' } })
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: user.username.toUpperCase() } })
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(confirm)
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/v1/me', expect.objectContaining({ method: 'DELETE' })))
+  })
+
+  it('should keep the account when deletion is backed out of', async () => {
+    const fetcher = stubFetch(() => [])
+    renderWithApp(() => <Settings user={user} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete account' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my account' }))
+    expect(screen.getByRole('button', { name: 'Delete account' })).toBeTruthy()
+    expect(fetcher).not.toHaveBeenCalledWith('/v1/me', expect.objectContaining({ method: 'DELETE' }))
   })
 
   it('should only show the authenticator to staff', async () => {
