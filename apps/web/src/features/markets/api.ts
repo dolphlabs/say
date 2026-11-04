@@ -43,7 +43,7 @@ export type Candle = { bucket_at: string; open: number; high: number; low: numbe
 
 export type Period = '1H' | '6H' | '1D' | '1W' | 'ALL'
 
-export type StandingRow = { rank: number; account_id: string; username: string; avatar_color: string; calls: number; win_rate: string; profit: number }
+export type StandingRow = { rank: number; account_id: string; username: string; avatar_color: string; avatar_url: string | null; calls: number; win_rate: string; profit: number }
 
 export type PublicResolution = {
   state: string

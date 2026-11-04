@@ -27,6 +27,7 @@ fn row_to_json(r: domain.StandingsRow) -> zokor.Json {
         .set_str("account_id", r.account_id)
         .set_str("username", r.username)
         .set_str("avatar_color", r.avatar_color)
+        .set("avatar_url", opt_url(r.avatar_url))
         .set_int("calls", r.calls)
         .set_str("win_rate", r.win_rate)
         .set_int("profit", r.profit);
@@ -115,4 +116,9 @@ fn get_strip_handler(c: zokor.Ctx[app.App]) -> http.Response {
 
     let out = zokor.jobj().set("items", items_arr);
     return zokor.no_store(zokor.ok_json(out.render()));
+}
+
+fn opt_url(u: str) -> zokor.Json {
+    if len(u) == 0 { return zokor.jnull(); }
+    return zokor.jstr(u);
 }

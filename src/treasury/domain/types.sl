@@ -71,3 +71,8 @@ pub gc struct HeartbeatPayload {
     used: int,
     spread_ticks: int
 }
+
+pub fn bot_reportable_status(status: str) -> bool {
+    return status == "QUOTING" || status == "PULLED_STALE" || status == "PULLED_CAP" ||
+        status == "PULLED_DRAWDOWN" || status == "PULLED_MARKET";
+}

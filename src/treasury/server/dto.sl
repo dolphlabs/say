@@ -36,7 +36,6 @@ pub gc struct SeasonBudgetDto {
 }
 
 pub gc struct HeartbeatDto {
-    bot_id: str,
     market_id: str,
     status: str,
     status_reason: str,

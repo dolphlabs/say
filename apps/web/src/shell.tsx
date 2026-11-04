@@ -101,7 +101,7 @@ function Account() {
       </Link>
       <Notifications />
       <Link to="/settings" className="avatar-link" aria-label="Your profile">
-        <Avatar name={user.username} />
+        <Avatar name={user.username} src={user.avatar_url} />
       </Link>
     </>
   )

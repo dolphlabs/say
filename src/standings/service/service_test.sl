@@ -13,6 +13,7 @@ fn fake_load_standings_rows(ctx: FakeStoreContext, ordinal: int, sort_by: str, l
         account_id: "acc-1",
         username: "kemi.calls",
         avatar_color: "#e91e63",
+        avatar_url: "",
         profit: 514,
         calls: 2,
         wins: 1,

@@ -7,6 +7,8 @@ fn register_errors(r: zokor.Registry) {
     zokor.register(r, "USERNAME_INVALID", 422, "Use 3-20 characters: a-z, 0-9, . and _.");
     zokor.register(r, "USERNAME_RESERVED", 422, "That username is reserved.");
     zokor.register(r, "USERNAME_TAKEN", 409, "That username is taken.");
+    zokor.register(r, "AVATARS_DISABLED", 503, "Photo uploads are not set up on this server.");
+    zokor.register(r, "AVATAR_INVALID", 400, "That upload could not be confirmed. Try uploading the photo again.");
     zokor.register(r, "USERNAME_HOLD_EXPIRED", 409, "Your username hold ran out. Pick it again.");
     zokor.register(r, "EMAIL_INVALID", 422, "That email address does not look right.");
     zokor.register(r, "EMAIL_IN_USE", 409, "That email already has an account. Log in instead.");

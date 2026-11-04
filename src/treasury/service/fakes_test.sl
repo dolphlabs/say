@@ -96,20 +96,50 @@ fn fake_propose_season_budget(f: FakeTreasuryStore, season: str, amt: int, op: s
     return ok("appr_fake_123");
 }
 
-fn fake_record_heartbeat(f: FakeTreasuryStore, p: domain.HeartbeatPayload) -> result[bool, str] {
-    push(f.calls, "heartbeat " + p.bot_id + " " + p.market_id);
+fn fake_record_heartbeat(f: FakeTreasuryStore, p: domain.HeartbeatPayload) -> result[str, str] {
+    push(f.calls, "heartbeat " + p.bot_id + " " + p.market_id + " " + p.status);
     if len(f.failure) > 0 { return err(f.failure); }
+    return ok(p.status);
+}
+
+fn fake_bot_ids(f: FakeTreasuryStore) -> result[[str], str] {
+    push(f.calls, "bot_ids");
+    if len(f.failure) > 0 { return err(f.failure); }
+    return ok(["bot_1", "bot_2"]);
+}
+
+gc struct FakeOrders {
+    calls: [str],
+    open: map[str][str],
+    failing_market: str,
+    open_failure: str
+}
+
+fn fake_orders() -> FakeOrders {
+    let calls: [str] = [];
+    let open: map[str][str] = {};
+    open["bot_1"] = ["mkt_1", "mkt_2"];
+    open["bot_2"] = ["mkt_3"];
+    return FakeOrders { calls: calls, open: open, failing_market: "", open_failure: "" };
+}
+
+fn fake_open_markets(f: FakeOrders, bot_id: str) -> result[[str], str] {
+    if len(f.open_failure) > 0 { return err(f.open_failure); }
+    for k, v in f.open {
+        if k == bot_id { return ok(v); }
+    }
+    let none_open: [str] = [];
+    return ok(none_open);
+}
+
+fn fake_cancel_all(f: FakeOrders, market_id: str, bot_id: str) -> result[bool, str] {
+    push(f.calls, "cancel_all " + bot_id + " " + market_id);
+    if market_id == f.failing_market { return err("RUNTIME_RESERVATION_EMPTY"); }
     return ok(true);
 }
 
-fn fake_cancel_bot_orders(f: FakeTreasuryStore, bot_id: str, market_id: str) -> result[int, str] {
-    push(f.calls, "cancel_bot_orders " + bot_id + " " + market_id);
-    return ok(2);
-}
-
-fn fake_cancel_all_bots_orders(f: FakeTreasuryStore) -> result[int, str] {
-    push(f.calls, "cancel_all_bots_orders");
-    return ok(10);
+fn fake_bot_orders(f: FakeOrders) -> BotOrders[FakeOrders] {
+    return BotOrders[FakeOrders] { context: f, open_markets: fake_open_markets, cancel_all: fake_cancel_all };
 }
 
 fn fake_treasury_service(f: FakeTreasuryStore) -> TreasuryService[FakeTreasuryStore] {
@@ -127,7 +157,6 @@ fn fake_treasury_service(f: FakeTreasuryStore) -> TreasuryService[FakeTreasurySt
         topup_budget: fake_topup_budget,
         propose_season_budget: fake_propose_season_budget,
         record_heartbeat: fake_record_heartbeat,
-        cancel_bot_orders: fake_cancel_bot_orders,
-        cancel_all_bots_orders: fake_cancel_all_bots_orders
+        bot_ids: fake_bot_ids
     });
 }

@@ -46,10 +46,10 @@ export type Tone = 'green' | 'red' | 'orange' | 'blue' | 'purple' | 'pink' | 'cy
 
 export const Chip = ({ tone, children }: { tone: Tone; children: ReactNode }) => <span className={`chip tone-${tone}`}>{children}</span>
 
-export function Avatar({ name, color, size = 'md' }: { name: string; color?: string; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
+export function Avatar({ name, color, src, size = 'md' }: { name: string; color?: string; src?: string | null; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
   return (
     <span className={`avatar ${size}`} style={color ? { background: color } : undefined} aria-hidden="true">
-      {name.charAt(0).toUpperCase()}
+      {src ? <img src={src} alt="" loading="lazy" /> : name.charAt(0).toUpperCase()}
     </span>
   )
 }

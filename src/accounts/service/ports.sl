@@ -248,6 +248,7 @@ pub gc struct SettingsStore[C] {
     grant_role_direct: fn(C, str, str) -> result[bool, str],
     revoke_role_direct: fn(C, str, str) -> result[bool, str],
     open_markets_for_account: fn(C, str) -> result[[str], str],
-    anonymise_account: fn(C, str, str, str) -> result[[bytes], str]
+    anonymise_account: fn(C, str, str, str) -> result[[bytes], str],
+    set_avatar_url: fn(C, str, opt[str]) -> result[bool, str]
 }
 

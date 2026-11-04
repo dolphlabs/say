@@ -26,6 +26,7 @@ gc struct StandingsSqlRow {
     account_id: str,
     username: str,
     avatar_color: str,
+    avatar_url: str,
     profit: int,
     calls: int,
     wins: int,
@@ -80,7 +81,7 @@ pub fn get_current_season(s: PostgresStandingsStore) -> result[opt[domain.Season
 }
 
 pub fn load_standings_rows(s: PostgresStandingsStore, season_ordinal: int, sort_by: str, limit_n: int) -> result[[domain.StandingsRow], str] {
-    let q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
+    let q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, coalesce(a.avatar_url, '') as avatar_url, " +
         "ss.profit, ss.calls, ss.wins, ss.losses, " +
         "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
         "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
@@ -90,7 +91,7 @@ pub fn load_standings_rows(s: PostgresStandingsStore, season_ordinal: int, sort_
         "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
         "order by ss.profit desc, ss.profit_reached_at asc, ss.account_id asc limit $2";
     if sort_by == "win_rate" {
-        q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
+        q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, coalesce(a.avatar_url, '') as avatar_url, " +
             "ss.profit, ss.calls, ss.wins, ss.losses, " +
             "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
             "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
@@ -100,7 +101,7 @@ pub fn load_standings_rows(s: PostgresStandingsStore, season_ordinal: int, sort_
             "where s.ordinal = $1 and a.status = 'ACTIVE' and a.leaderboard_eligible = true " +
             "and ss.rank_win is not null order by ss.rank_win asc, ss.profit desc limit $2";
     } else if sort_by == "calls" {
-        q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, " +
+        q = "select ss.account_id::text as account_id, a.username, coalesce(a.avatar_color, '#e91e63') as avatar_color, coalesce(a.avatar_url, '') as avatar_url, " +
             "ss.profit, ss.calls, ss.wins, ss.losses, " +
             "(extract(epoch from ss.profit_reached_at)*1000)::bigint as profit_reached_at, " +
             "ss.rank_profit, ss.rank_win, ss.rank_calls, a.leaderboard_eligible " +
@@ -120,6 +121,7 @@ pub fn load_standings_rows(s: PostgresStandingsStore, season_ordinal: int, sort_
             account_id: row.account_id,
             username: row.username,
             avatar_color: row.avatar_color,
+            avatar_url: row.avatar_url,
             profit: row.profit,
             calls: row.calls,
             wins: row.wins,

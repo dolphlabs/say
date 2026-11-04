@@ -93,6 +93,7 @@ pub fn get_profile[C](svc: ProfileService[C], raw_username: str, base_url: str, 
     let prof = domain.Profile {
         username: lookup.username,
         avatar_color: lookup.avatar_color,
+        avatar_url: lookup.avatar_url,
         joined_season: lookup.joined_season,
         share_url: share_url,
         current_season: stats,

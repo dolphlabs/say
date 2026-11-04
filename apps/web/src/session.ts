@@ -12,6 +12,7 @@ export type User = {
   google_linked: boolean
   username_changeable_at: string | null
   created_at?: string
+  avatar_url?: string | null
   roles?: Role[]
 }
 

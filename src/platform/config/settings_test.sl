@@ -94,3 +94,22 @@ fn test_should_require_a_sendbyte_key_in_prod() {
     }
     panic("prod accepted without a sendbyte key");
 }
+
+fn test_should_refuse_a_partial_cloudinary_setup() {
+    let cfg = values(["PORT", "8080", "OTP_SECRET", "0123456789abcdef0123456789abcdef", "CLOUDINARY_CLOUD_NAME", "demo"]);
+    let _s = settings_from(cfg);
+    let r = zokor.check(cfg);
+    guard let _ok = r else let e = err_of(r) {
+        assert(strings.contains(e, "CLOUDINARY"), e);
+        return;
+    }
+    panic("partial Cloudinary settings accepted");
+}
+
+fn test_should_read_cloudinary_settings_and_leave_them_off_by_default() {
+    let off = settings_from(values(["PORT", "8080", "OTP_SECRET", "0123456789abcdef0123456789abcdef"]));
+    assert(off.media.cloudinary_cloud_name == "" && off.media.cloudinary_api_secret == "");
+    let on = settings_from(values(["PORT", "8080", "OTP_SECRET", "0123456789abcdef0123456789abcdef",
+        "CLOUDINARY_CLOUD_NAME", "demo", "CLOUDINARY_API_KEY", "123", "CLOUDINARY_API_SECRET", "secret"]));
+    assert(on.media.cloudinary_cloud_name == "demo" && on.media.cloudinary_api_key == "123" && on.media.cloudinary_api_secret == "secret");
+}

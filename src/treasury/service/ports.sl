@@ -13,7 +13,14 @@ pub gc struct TreasuryStore[C] {
     get_params: fn(C, str, str) -> result[opt[domain.BotParams], str],
     topup_budget: fn(C, str, str, str, int, str, str) -> result[bool, str],
     propose_season_budget: fn(C, str, int, str, str) -> result[str, str],
-    record_heartbeat: fn(C, domain.HeartbeatPayload) -> result[bool, str],
-    cancel_bot_orders: fn(C, str, str) -> result[int, str],
-    cancel_all_bots_orders: fn(C) -> result[int, str]
+    record_heartbeat: fn(C, domain.HeartbeatPayload) -> result[str, str],
+    bot_ids: fn(C) -> result[[str], str]
+}
+
+// The exchange owns orders, so pulling a bot's quotes goes through its
+// command queue, never through the treasury's own tables.
+pub gc struct BotOrders[Q] {
+    context: Q,
+    open_markets: fn(Q, str) -> result[[str], str],
+    cancel_all: fn(Q, str, str) -> result[bool, str]
 }

@@ -125,7 +125,7 @@ export function ProfilePage() {
         ) : (
           <>
             <section className="profile-head">
-              <Avatar name={profile.data.username} color={profile.data.avatar_color} size="xl" />
+              <Avatar name={profile.data.username} color={profile.data.avatar_color} src={profile.data.avatar_url} size="xl" />
               <div className="grow">
                 <h1>@{profile.data.username}</h1>
                 {profile.data.joined_season && <span className="muted">Playing since {profile.data.joined_season}</span>}

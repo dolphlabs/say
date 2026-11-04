@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
-import { Settings } from '../src/features/profile/Settings'
+import { Settings, uploadPhoto } from '../src/features/profile/Settings'
 import { json, renderWithApp, stubFetch, user } from './render'
 
 afterEach(() => {
@@ -46,5 +46,38 @@ describe('account settings', () => {
     view.unmount()
     renderWithApp(() => <Settings user={{ ...user, roles: ['treasury'] } as typeof user} />)
     expect(await screen.findByText('Authenticator')).toBeTruthy()
+  })
+
+  it('should upload a photo straight to Cloudinary and save the signed result', async () => {
+    const fetcher = stubFetch((url, init) => {
+      if (url === '/v1/me/avatar/upload') return { upload_url: 'https://api.cloudinary.com/v1_1/demo/image/upload', fields: { api_key: '123', signature: 'sig', public_id: 'say/avatars/u1' } }
+      if (url === 'https://api.cloudinary.com/v1_1/demo/image/upload') {
+        const form = init?.body as FormData
+        expect(form.get('public_id')).toBe('say/avatars/u1')
+        expect(form.get('file')).toBeInstanceOf(File)
+        return { public_id: 'say/avatars/u1', version: 17, signature: 'resp-sig' }
+      }
+      if (url === '/v1/me/avatar') return { avatar_url: 'https://res.cloudinary.com/demo/image/upload/v17/say/avatars/u1' }
+      return []
+    })
+    const url = await uploadPhoto(new File(['x'], 'me.png', { type: 'image/png' }))
+    expect(url).toContain('res.cloudinary.com')
+    expect(fetcher).toHaveBeenCalledWith('/v1/me/avatar', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ public_id: 'say/avatars/u1', version: '17', signature: 'resp-sig' }) }))
+  })
+
+  it('should refuse a non-image or oversized file before asking the server', async () => {
+    const fetcher = stubFetch(() => [])
+    await expect(uploadPhoto(new File(['x'], 'notes.pdf', { type: 'application/pdf' }))).rejects.toThrow('JPG, PNG or WebP')
+    await expect(uploadPhoto(new File([new Uint8Array(5 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' }))).rejects.toThrow('under 5 MB')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('should show the Cloudinary error when an upload is rejected', async () => {
+    stubFetch((url) => {
+      if (url === '/v1/me/avatar/upload') return { upload_url: 'https://api.cloudinary.com/v1_1/demo/image/upload', fields: {} }
+      if (url.startsWith('https://api.cloudinary.com')) return json({ error: { message: 'Invalid image file' } }, 400)
+      return []
+    })
+    await expect(uploadPhoto(new File(['x'], 'me.png', { type: 'image/png' }))).rejects.toThrow('Invalid image file')
   })
 })

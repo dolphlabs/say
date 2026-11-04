@@ -5,6 +5,7 @@ import "proc";
 import "strings";
 import "time";
 import "zokor";
+import "../domain" as domain;
 
 pub fn test_treasury_store_helpers() {
     let _dl = pg_deadline();
@@ -139,5 +140,47 @@ fn test_summary_reports_only_recorded_figures() {
     assert(grants.approx_players == 1);
     assert(grants.approx_total == 1000);
     assert(len(grants.at) > 0);
+    close_summary_db(db);
+}
+
+fn bot_heartbeat(bot_id: str, status: str) -> domain.HeartbeatPayload {
+    return domain.HeartbeatPayload {
+        bot_id: bot_id, market_id: "00000000-0000-4000-8000-000000000005", status: status,
+        status_reason: "bot says", holding_yes: 0, holding_no: 0, used: 40, spread_ticks: 3
+    };
+}
+
+fn test_should_keep_an_operator_pause_whatever_a_heartbeat_reports() {
+    guard let db = summary_db() else { return; }
+    run_test_sql(db.owner, "insert into accounts(id,username,status,kind) values ('00000000-0000-4000-8000-000000000001','test_operator','ACTIVE','USER'),('00000000-0000-4000-8000-000000000002','test_bot_one','ACTIVE','USER'),('00000000-0000-4000-8000-000000000003','test_bot_two','ACTIVE','USER')");
+    run_test_sql(db.owner, "insert into seasons(id,ordinal,starts_at,ends_at,status) values ('00000000-0000-4000-8000-000000000004',999,'2026-01-01T00:00:00Z','2026-01-15T00:00:00Z','CLOSED')");
+    run_test_sql(db.owner, "insert into markets(id,slug,status,created_by,tick) values ('00000000-0000-4000-8000-000000000005','test-market','DRAFT','00000000-0000-4000-8000-000000000001',1)");
+    run_test_sql(db.owner, "insert into bot_markets(bot_id,market_id,season_id,status,status_reason) values ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000005','00000000-0000-4000-8000-000000000004','PAUSED_MANUAL','operator pause'),('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000005','00000000-0000-4000-8000-000000000004','PULLED_STALE','')");
+    let store = make_postgres_treasury_store(db.app);
+
+    let manual = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000002", "QUOTING"));
+    guard let kept = manual else let e = err_of(manual) { panic(e); }
+    assert(kept == "PAUSED_MANUAL", kept);
+    assert(read_test_value(db.owner, "select status_reason as val from bot_markets where bot_id='00000000-0000-4000-8000-000000000002'") == "operator pause");
+    assert(read_test_value(db.owner, "select used::text as val from bot_markets where bot_id='00000000-0000-4000-8000-000000000002'") == "40");
+
+    run_test_sql(db.owner, "update trading_halt set bots_paused=true where id=1");
+    let global = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000003", "QUOTING"));
+    guard let held = global else let e = err_of(global) { panic(e); }
+    assert(held == "PAUSED_ALL", held);
+
+    run_test_sql(db.owner, "update trading_halt set bots_paused=false where id=1");
+    run_test_sql(db.owner, "update bot_markets set status='PULLED_STALE' where bot_id='00000000-0000-4000-8000-000000000003'");
+    let free = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000003", "QUOTING"));
+    guard let quoting = free else let e = err_of(free) { panic(e); }
+    assert(quoting == "QUOTING", quoting);
+
+    let stranger = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000001", "QUOTING"));
+    if let _s = stranger { panic("a heartbeat for a bot with no row was accepted"); }
+    else let e = err_of(stranger) { assert(e == "NOT_FOUND", e); }
+
+    let missing = pg_set_status(store, "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000005", "PAUSED_MANUAL", "x");
+    if let _s = missing { panic("pausing an unknown bot succeeded"); }
+    else let e = err_of(missing) { assert(e == "NOT_FOUND", e); }
     close_summary_db(db);
 }

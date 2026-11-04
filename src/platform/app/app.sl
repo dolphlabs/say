@@ -48,6 +48,7 @@ pub gc struct Postman {
 pub gc struct App {
     markets: markets.Markets[markets_store.Store],
     treasury: treasury.TreasuryService[treasury_store.PostgresTreasuryStore],
+    bot_orders: treasury.BotOrders[ExchangeBotOrders],
     standings: standings_svc.StandingsService[standings_store.PostgresStandingsStore],
     profiles: profile_svc.ProfileService[profile_store.PostgresProfileStore],
     audit: audit_svc.AuditService[audit_store.PostgresAuditStore],
@@ -137,7 +138,8 @@ pub fn auth_config(s: config.Settings, dummy_hash: str) -> accounts.AuthConfig {
         google_client_id: s.auth.google_client_id,
         google_redirect_uri: redirect,
         google_auth_url: s.auth.google_auth_url,
-        dummy_hash: dummy_hash
+        dummy_hash: dummy_hash,
+        avatars: accounts.avatar_keys(s.media.cloudinary_cloud_name, s.media.cloudinary_api_key, s.media.cloudinary_api_secret)
     };
 }
 
@@ -213,6 +215,7 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
     return ok(App {
         markets: registry,
         treasury: tr_service,
+        bot_orders: bot_orders_on(command_queue, exchange_reads),
         standings: st_service,
         profiles: pr_service,
         audit: au_service,
@@ -381,10 +384,11 @@ pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
         if let d = a.db {
             let h = encoding.hex_encode(crypto.sha256(to_bytes(token)));
             let lk = db.lookup_bot_key(d, h, until_of(time.mono() + 2000000000));
-            if let found_opt = lk {
-                if let bot_id = found_opt {
-                    return ok(some(Caller { account_id: bot_id, session_hash: h }));
-                }
+            guard let found_opt = lk else let e = err_of(lk) {
+                return err(e);
+            }
+            if let bot_id = found_opt {
+                return ok(some(Caller { account_id: bot_id, session_hash: h }));
             }
         }
         return ok(none_caller);
@@ -425,6 +429,31 @@ pub fn has_role(a: App, account_id: str, role: str) -> result[bool, str] {
 
 pub fn has_recent_totp(a: App, session_id: str, account_id: str) -> bool {
     return accounts.has_recent_totp(a.accounts, session_id, account_id);
+}
+
+pub gc struct ExchangeBotOrders {
+    queue: exchange.Queue[exchange_store.Postgres],
+    reads: exchange.ReadStore[exchange_store.Postgres]
+}
+
+fn bot_open_markets(x: ExchangeBotOrders, account_id: str) -> result[[str], str] {
+    return exchange.read_open_markets(x.reads, account_id);
+}
+
+fn bot_cancel_all(x: ExchangeBotOrders, market_id: str, account_id: str) -> result[bool, str] {
+    let r = exchange.enqueue_cancel_all(x.queue, market_id, account_id, new_uuid());
+    guard let _receipt = r else let e = err_of(r) {
+        return err(e);
+    }
+    return ok(true);
+}
+
+pub fn bot_orders_on(queue: exchange.Queue[exchange_store.Postgres], reads: exchange.ReadStore[exchange_store.Postgres]) -> treasury.BotOrders[ExchangeBotOrders] {
+    return treasury.BotOrders[ExchangeBotOrders] {
+        context: ExchangeBotOrders { queue: queue, reads: reads },
+        open_markets: bot_open_markets,
+        cancel_all: bot_cancel_all
+    };
 }
 
 pub fn cancel_all_orders_for_market(a: App, market_id: str, account_id: str, command_ref: str) -> result[exchange.EnqueueResult, str] {

@@ -5,5 +5,6 @@ pub fn register_errors(r: zokor.Registry) {
     zokor.register(r, "treasury.bad_request", 400, "Check your request parameters.");
     zokor.register(r, "treasury.not_found", 404, "Bot or market not found.");
     zokor.register(r, "treasury.budget_cap_exceeded", 409, "Allocation would exceed the approved season budget cap.");
+    zokor.register(r, "treasury.cancel_failed", 503, "The bot is paused, but not all of its orders could be cancelled. Pause it again to retry.");
     zokor.register(r, "treasury.unavailable", 503, "Treasury service unavailable, try again.");
 }

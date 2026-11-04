@@ -54,7 +54,7 @@ pub fn order_admission_store(postgres: Postgres) -> service.OrderAdmissionStore[
 pub fn read_store(postgres: Postgres) -> service.ReadStore[Postgres] {
     return service.ReadStore[Postgres] {
         context:postgres,order:st_read_order,orders:st_read_orders,
-        trades:st_read_trades,history:st_read_history
+        trades:st_read_trades,history:st_read_history,open_markets:st_read_open_markets
     };
 }
 

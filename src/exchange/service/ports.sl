@@ -151,7 +151,8 @@ pub gc struct ReadStore[C] {
     order: fn(C, str, str) -> result[opt[ReadOrder], str],
     orders: fn(C, str, str, str, str, int) -> result[ReadOrdersPage, str],
     trades: fn(C, str, int, int, int) -> result[ReadTradesPage, str],
-    history: fn(C, str, int, int) -> result[[ReadCandle], str]
+    history: fn(C, str, int, int) -> result[[ReadCandle], str],
+    open_markets: fn(C, str) -> result[[str], str]
 }
 
 pub gc struct BookViewStore[C] {

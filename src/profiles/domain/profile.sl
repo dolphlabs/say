@@ -22,6 +22,7 @@ pub gc struct CurrentSeasonStats {
 pub gc struct Profile {
     username: str,
     avatar_color: str,
+    avatar_url: str,
     joined_season: str,
     share_url: str,
     current_season: CurrentSeasonStats,

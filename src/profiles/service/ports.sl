@@ -6,6 +6,7 @@ pub gc struct AccountLookup {
     account_id: str,
     username: str,
     avatar_color: str,
+    avatar_url: str,
     status: str,
     created_at_ms: int,
     joined_season: str

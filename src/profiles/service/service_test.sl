@@ -12,6 +12,7 @@ fn fake_find_user(ctx: FakeStoreContext, raw_username: str) -> result[AccountLoo
             account_id: "acc-1",
             username: "kemi.calls",
             avatar_color: "#e91e63",
+            avatar_url: "",
             status: "ACTIVE",
             created_at_ms: 1000,
             joined_season: "Season 02"
@@ -23,6 +24,7 @@ fn fake_find_user(ctx: FakeStoreContext, raw_username: str) -> result[AccountLoo
         account_id: "",
         username: "",
         avatar_color: "",
+        avatar_url: "",
         status: "",
         created_at_ms: 0,
         joined_season: ""

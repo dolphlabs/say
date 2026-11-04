@@ -22,10 +22,15 @@ fn read_fake_history(f: ReadFake,_market: str,_range: int,_bucket: int) -> resul
     return ok([]);
 }
 
+fn read_fake_open_markets(f: ReadFake,_account: str) -> result[[str],str] {
+    f.calls+=1;
+    return ok(["00000000-0000-4000-a000-000000000002"]);
+}
+
 fn read_fake_store(f: ReadFake) -> ReadStore[ReadFake] {
     return ReadStore[ReadFake] {
         context:f,order:read_fake_order,orders:read_fake_orders,
-        trades:read_fake_trades,history:read_fake_history
+        trades:read_fake_trades,history:read_fake_history,open_markets:read_fake_open_markets
     };
 }
 
@@ -52,4 +57,17 @@ fn test_public_reads_validate_market_and_range() {
     if let _page=bad_history { panic("invalid history range accepted"); }
     else let e=err_of(bad_history) { assert(e=="INVALID_READ_REQUEST"); }
     assert(fake.calls==0);
+}
+
+fn test_should_reject_an_invalid_account_when_reading_open_markets() {
+    let fake=ReadFake { calls:0 };
+    let store=read_fake_store(fake);
+    let bad=read_open_markets(store,"not-an-id");
+    if let _m=bad { panic("invalid account accepted"); }
+    else let e=err_of(bad) { assert(e=="INVALID_READ_REQUEST"); }
+    assert(fake.calls==0);
+    let good=read_open_markets(store,"00000000-0000-4000-a000-000000000001");
+    guard let markets=good else { panic("valid account refused"); }
+    assert(len(markets)==1);
+    assert(fake.calls==1);
 }

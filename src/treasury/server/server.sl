@@ -1,5 +1,5 @@
-// zokor:public
 import "http";
+import "strings";
 import "zokor";
 import "../../platform/app" as app;
 import "../../platform/auth" as auth;
@@ -23,8 +23,10 @@ pub fn mount(r: zokor.Router[app.App]) -> int {
     adm.post("/bots/:bot_id/markets/:market_id/topup", topup_handler);
     adm.post("/treasury/season-budget", season_budget_handler);
 
-    // Internal endpoint for bot heartbeats
-    r.post("/v1/internal/bots/heartbeat", heartbeat_handler);
+    // A bot signs in with its own key, so it can only report on itself.
+    let internal = r.group("/v1/internal");
+    internal.before(auth.require_session);
+    internal.post("/bots/heartbeat", heartbeat_handler);
 
     return 0;
 }
@@ -99,10 +101,9 @@ fn pause_bot_handler(c: zokor.Ctx[app.App]) -> http.Response {
     if let body = dr {
         if len(body.reason) > 0 { reason = body.reason; }
     }
-    let res = treasury_svc.pause_bot(c.state.treasury, bot_id, market_id, reason);
+    let res = treasury_svc.pause_bot(c.state.treasury, c.state.bot_orders, bot_id, market_id, reason);
     guard let _ok = res else let e = err_of(res) {
-        c.state.settings.server.logger.error("treasury", "pause bot failed: " + e);
-        return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
+        return pause_failure(c, "pause bot", e);
     }
     return zokor.ok_json("{\"ok\":true}");
 }
@@ -120,8 +121,7 @@ fn resume_bot_handler(c: zokor.Ctx[app.App]) -> http.Response {
     }
     let res = treasury_svc.resume_bot(c.state.treasury, bot_id, market_id, reason);
     guard let _ok = res else let e = err_of(res) {
-        c.state.settings.server.logger.error("treasury", "resume bot failed: " + e);
-        return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
+        return pause_failure(c, "resume bot", e);
     }
     return zokor.ok_json("{\"ok\":true}");
 }
@@ -135,12 +135,22 @@ fn pause_all_handler(c: zokor.Ctx[app.App]) -> http.Response {
     if let body = dr {
         if len(body.reason) > 0 { reason = body.reason; }
     }
-    let res = treasury_svc.pause_all_bots(c.state.treasury, reason);
+    let res = treasury_svc.pause_all_bots(c.state.treasury, c.state.bot_orders, reason);
     guard let _ok = res else let e = err_of(res) {
-        c.state.settings.server.logger.error("treasury", "pause all failed: " + e);
-        return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
+        return pause_failure(c, "pause all", e);
     }
     return zokor.ok_json("{\"ok\":true}");
+}
+
+fn pause_failure(c: zokor.Ctx[app.App], what: str, e: str) -> http.Response {
+    if e == "NOT_FOUND" {
+        return zokor.respond(c.errors, "treasury.not_found", c.request_id);
+    }
+    c.state.settings.server.logger.error("treasury", what + " failed: " + e);
+    if strings.has_prefix(e, "CANCEL_FAILED") {
+        return zokor.respond(c.errors, "treasury.cancel_failed", c.request_id);
+    }
+    return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
 }
 
 fn resume_all_handler(c: zokor.Ctx[app.App]) -> http.Response {
@@ -232,7 +242,7 @@ fn heartbeat_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return bad;
     }
     let payload = domain.HeartbeatPayload {
-        bot_id: body.bot_id,
+        bot_id: c.local("account_id"),
         market_id: body.market_id,
         status: body.status,
         status_reason: body.status_reason,
@@ -242,9 +252,15 @@ fn heartbeat_handler(c: zokor.Ctx[app.App]) -> http.Response {
         spread_ticks: body.spread_ticks
     };
     let res = treasury_svc.record_heartbeat(c.state.treasury, payload);
-    guard let _ok = res else let e = err_of(res) {
+    guard let status = res else let e = err_of(res) {
+        if e == "INVALID_HEARTBEAT" {
+            return zokor.respond(c.errors, "treasury.bad_request", c.request_id);
+        }
+        if e == "NOT_FOUND" {
+            return zokor.respond(c.errors, "treasury.not_found", c.request_id);
+        }
         c.state.settings.server.logger.warn("treasury", "heartbeat error: " + e);
         return zokor.respond(c.errors, "treasury.unavailable", c.request_id);
     }
-    return zokor.ok_json("{\"ok\":true}");
+    return zokor.ok_json(zokor.jobj().set_str("status", status).render());
 }

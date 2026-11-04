@@ -16,6 +16,7 @@ gc struct AccountLookupDbRow {
     id: str,
     username: str,
     avatar_color: str,
+    avatar_url: str,
     status: str,
     created_at_ms: int,
     joined_season: str
@@ -48,7 +49,7 @@ fn pr_dl() -> until {
 
 pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.AccountLookup, str] {
     let r: result[[AccountLookupDbRow], str] = zokor.query_all(s.conn,
-        "select id::text as id, username, coalesce(avatar_color, '#e91e63') as avatar_color, status, " +
+        "select id::text as id, username, coalesce(avatar_color, '#e91e63') as avatar_color, coalesce(avatar_url, '') as avatar_url, status, " +
         "(extract(epoch from a.created_at)*1000)::bigint as created_at_ms, " +
         "coalesce((select 'Season ' || lpad(s.ordinal::text, 2, '0') from seasons s " +
         "where s.starts_at <= greatest(a.created_at, (select min(starts_at) from seasons)) " +
@@ -64,6 +65,7 @@ pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.Acc
             account_id: row.id,
             username: row.username,
             avatar_color: row.avatar_color,
+            avatar_url: row.avatar_url,
             status: row.status,
             created_at_ms: row.created_at_ms,
             joined_season: row.joined_season
@@ -86,6 +88,8 @@ pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.Acc
             account_id: "",
             username: "",
             avatar_color: "",
+        avatar_url: "",
+            avatar_url: "",
             status: "",
             created_at_ms: 0,
             joined_season: ""
@@ -98,6 +102,7 @@ pub fn find_user(s: PostgresProfileStore, raw_username: str) -> result[ports.Acc
         account_id: "",
         username: "",
         avatar_color: "",
+        avatar_url: "",
         status: "",
         created_at_ms: 0,
         joined_season: ""

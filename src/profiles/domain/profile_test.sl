@@ -3,6 +3,7 @@ fn test_profile_privacy_never_exposes_private_fields() {
     let p = Profile {
         username: "kemi.calls",
         avatar_color: "#e91e63",
+        avatar_url: "",
         joined_season: "Season 01",
         share_url: "https://say.it/u/kemi.calls",
         current_season: CurrentSeasonStats {
