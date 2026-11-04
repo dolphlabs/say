@@ -75,6 +75,7 @@ pub gc struct App {
     snapshot_queue: chan[exchange.SnapshotWrite],
     reply_slots: chan[int],
     mailer: accounts.Mailer[Postman],
+    notice_sender: notifications_svc.NoticeSender[Postman],
     settings: config.Settings,
     metrics: metrics.Registry,
     db: opt[db.Db],
@@ -105,6 +106,25 @@ fn send_mail(p: Postman, m: accounts.Mail) -> result[bool, str] {
     return email.send(p.email, email.EmailMessage {
         from: p.from, to: [m.to], subject: subject, html: html, text: text, tags: [m.purpose]
     });
+}
+
+fn send_notice(p: Postman, m: notifications_svc.NoticeMail) -> result[bool, str] {
+    let r = templates.Recipient { username: m.username, to: m.to, app_url: p.app_url };
+    let e = templates.NoticeEmail {
+        title: m.subject, body: m.body, link_path: m.link_url,
+        unsubscribe_url: p.app_url + "/v1/unsubscribe?token=" + m.unsubscribe_token
+    };
+    return email.send(p.email, email.EmailMessage {
+        from: p.from, to: [m.to], subject: m.subject,
+        html: templates.notice_email_html(r, e), text: templates.notice_email_text(r, e), tags: ["notice"]
+    });
+}
+
+pub fn notice_sender_on(e: email.Email, from: str, app_url: str) -> notifications_svc.NoticeSender[Postman] {
+    return notifications_svc.NoticeSender[Postman] {
+        context: Postman { email: e, from: from, app_url: without_trailing_slash(app_url) },
+        send: send_notice
+    };
 }
 
 fn without_trailing_slash(u: str) -> str {
@@ -242,6 +262,7 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         snapshot_queue: snapshot_queue,
         reply_slots: make_chan(s.exchange.max_waiters),
         mailer: mailer_on(mail, s.email.from, s.auth.app_url),
+        notice_sender: notice_sender_on(mail, s.email.from, s.auth.app_url),
         settings: s,
         metrics: metrics.new_registry(),
         db: some(d),
@@ -564,6 +585,7 @@ pub fn start_workers(a: App) {
     }
     start_stream_workers(a);
     spawn run_closing_soon_scheduler(a);
+    spawn run_notice_email_worker(a);
     spawn run_resolution_watchers(a);
     spawn standings_svc.run_standings_worker(a.standings);
 }
@@ -578,8 +600,27 @@ fn run_resolution_watchers(a: App) -> int {
 
 fn run_closing_soon_scheduler(a: App) -> int {
     while true {
-        time.sleep(30000000000); // 30s
-        let _ = notifications_svc.poll_closing_soon(a.notifications);
+        time.sleep(30000000000);
+        let r = notifications_svc.poll_closing_soon(a.notifications);
+        guard let _n = r else let e = err_of(r) {
+            a.settings.server.logger.error("notifications", e);
+            continue;
+        }
+    }
+    return 0;
+}
+
+fn run_notice_email_worker(a: App) -> int {
+    while true {
+        time.sleep(5000000000);
+        let r = notifications_svc.deliver_emails(a.notifications, a.notice_sender, (time.wall() / 1000000000) as int);
+        guard let report = r else let e = err_of(r) {
+            a.settings.server.logger.error("notifications", "email claim failed: " + e);
+            continue;
+        }
+        for p in report.problems {
+            a.settings.server.logger.warn("notifications", p);
+        }
     }
     return 0;
 }

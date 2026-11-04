@@ -34,3 +34,34 @@ fn test_should_avoid_phishing_style_wording_in_code_emails() {
         assert(!strings.contains(all, phrase), phrase);
     }
 }
+
+fn notice() -> NoticeEmail {
+    return NoticeEmail {
+        title: "Market closing soon",
+        body: "Will <b>Remo</b> win? closes at 16:00.",
+        link_path: "/markets/abc",
+        unsubscribe_url: "https://say.test/v1/unsubscribe?token=t.k.1&x=\"y\""
+    };
+}
+
+fn test_should_escape_market_text_and_link_into_the_notice_email() {
+    let html = notice_email_html(joe(), notice());
+    assert(strings.contains(html, "Will &lt;b&gt;Remo&lt;/b&gt; win?"), html);
+    assert(!strings.contains(html, "<b>Remo"), html);
+    assert(strings.contains(html, "href=\"https://say.test/markets/abc\""), html);
+    assert(strings.contains(html, "token=t.k.1&amp;x=&quot;y&quot;"), html);
+    assert(strings.contains(html, ">Unsubscribe</a>"), html);
+    let text = notice_email_text(joe(), notice());
+    assert(strings.contains(text, "Open say: https://say.test/markets/abc"), text);
+    assert(strings.contains(text, "Unsubscribe: https://say.test/v1/unsubscribe"), text);
+}
+
+fn test_should_drop_a_notice_link_that_leaves_say() {
+    for path in ["https://evil.test/x", "//evil.test/x", "javascript:alert(1)"] {
+        let e = notice();
+        let html = notice_email_html(joe(), NoticeEmail { title: e.title, body: e.body, link_path: path, unsubscribe_url: "" });
+        assert(!strings.contains(html, "evil.test") && !strings.contains(html, "javascript:"), html);
+        assert(!strings.contains(html, "Open say"), html);
+        assert(!strings.contains(html, "Unsubscribe"), html);
+    }
+}

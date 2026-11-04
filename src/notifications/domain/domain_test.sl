@@ -43,3 +43,12 @@ fn test_unsubscribe_token_lifecycle() {
         panic("expected failure for expired token");
     }
 }
+
+fn test_should_scope_market_notices_to_the_market_and_back_off_emails_up_to_a_cap() {
+    assert(market_scoped("closing_soon"));
+    assert(market_scoped("market_settled"));
+    assert(!market_scoped("season_started"));
+    assert(email_backoff_seconds(0) == 30);
+    assert(email_backoff_seconds(2) == 120);
+    assert(email_backoff_seconds(40) == 21600);
+}

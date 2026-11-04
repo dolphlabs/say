@@ -279,6 +279,22 @@ Public single-purpose unsubscribe endpoint for email notifications (no login req
   }
   ```
 
+- Tokens are signed when the email is sent and expire after 30 days, checked against the wall clock.
+
+### 2.6 Email delivery
+
+Notification emails are queued in `email_outbox` by the fan-out and sent by a worker on every node every 5 seconds:
+
+- A row is claimed with a 120-second lease (`FOR UPDATE SKIP LOCKED`), so two nodes never send it twice while the lease holds.
+- It is addressed to the account's current username and verified email. Rows whose account is no longer active or verified, or which has turned that email off, are closed as `skipped: recipient no longer reachable`.
+- HTML is rendered at send time from the shared email layout, with every dynamic value escaped. A link becomes a button only when it is a path inside say. Every email carries an unsubscribe link for its kind.
+- A failed send is retried after 30 s, doubling to a 6 h cap, up to 10 attempts. Failures are logged, never sent to a client.
+
+### 2.7 Fan-out
+
+- Recipients are active, non-bot `USER` accounts. Market notices (`closing_soon`, `result_proposed`, `market_settled`) go only to accounts with a positive position or an ADMITTED/OPEN/PARTIAL order in that market; season notices go to everyone. Email goes only to verified addresses.
+- A job is unique per `(kind, subject)` (migration 020) and keeps its cursor, so a failed fan-out resumes where it stopped. A closing-soon market is marked sent only after its fan-out has finished; failures are logged and retried on the next 30-second poll.
+
 ---
 
 ## 3. Performance & Test Verification

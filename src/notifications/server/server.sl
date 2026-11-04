@@ -140,7 +140,7 @@ fn get_unsubscribe_handler(c: zokor.Ctx[app.App]) -> http.Response {
         return zokor.respond(c.errors, "BAD_REQUEST", c.request_id);
     }
 
-    let now_s = (time.mono() / 1000000000) as int;
+    let now_s = (time.wall() / 1000000000) as int;
     let r = notif_svc.unsubscribe(c.state.notifications, token, now_s);
     guard let _ = r else let e = err_of(r) {
         if e == "TOKEN_EXPIRED" {

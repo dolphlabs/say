@@ -30,7 +30,35 @@ pub gc struct EmailToWrite {
     recipient_email: str,
     subject: str,
     body_text: str,
-    body_html: str
+    link_url: str
+}
+
+// An email due for sending, addressed with the account's current username
+// and verified email rather than whatever they were at fan-out time.
+pub gc struct DueEmail {
+    id: str,
+    account_id: str,
+    kind: str,
+    username: str,
+    email: str,
+    subject: str,
+    body_text: str,
+    link_url: str,
+    attempts: int
+}
+
+pub gc struct NoticeMail {
+    to: str,
+    username: str,
+    subject: str,
+    body: str,
+    link_url: str,
+    unsubscribe_token: str
+}
+
+pub gc struct NoticeSender[M] {
+    context: M,
+    send: fn(M, NoticeMail) -> result[bool, str]
 }
 
 pub gc struct NotificationStore[C] {
@@ -45,5 +73,8 @@ pub gc struct NotificationStore[C] {
     create_fanout_job: fn(C, str, str) -> result[domain.FanoutJob, str],
     find_job_recipients: fn(C, str, str, str, int) -> result[[NotificationRecipient], str],
     write_notification_batch: fn(C, str, [NoticeToWrite], [EmailToWrite], str) -> result[int, str],
-    complete_job: fn(C, str) -> result[int, str]
+    complete_job: fn(C, str) -> result[int, str],
+    claim_emails: fn(C, int, int) -> result[[DueEmail], str],
+    email_sent: fn(C, str) -> result[bool, str],
+    email_retry: fn(C, str, str, int) -> result[bool, str]
 }
