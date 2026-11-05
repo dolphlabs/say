@@ -178,7 +178,7 @@ export function OrderPanel({ market, book, positions, prefill }: Props) {
         ? `Buy ${sideLabel} · ${sedi(isMarket ? spend : cost)}`
         : `Sell ${number(qty)} ${sideLabel} · get ${sedi(big)}`
 
-  const setChipSpend = (n: number) => setSpend(clamp(n, 0, available ?? n))
+  const setChipSpend = (n: number) => setSpend(Math.max(0, n))
 
   return (
     <section className="panel order-panel" aria-labelledby="panel-h">

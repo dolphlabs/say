@@ -68,7 +68,6 @@ pub gc struct App {
     portfolio: portfolio_svc.PortfolioService[portfolio_store.PostgresPortfolioStore],
     notifications: notifications_svc.NotificationService[notifications_store.PostgresNotificationStore],
     resolution: resolution_svc.ResolutionService[resolution_store.PostgresResolutionStore],
-    node_id: str,
     runtime: RuntimeControl,
     runtime_views: map[str]str,
     runtime_views_lock: mutex,
@@ -255,8 +254,7 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         portfolio: port_service,
         notifications: notif_service,
         resolution: res_service,
-        node_id: node_id,
-        runtime: new_runtime_control(),
+        runtime: new_runtime_control(node_id),
         runtime_views: runtime_views,
         runtime_views_lock: runtime_views_lock,
         snapshot_queue: snapshot_queue,
@@ -526,7 +524,7 @@ fn run_outbox_publisher(a: App) -> int {
     spawn ledger_ticker(ticks, 5000);
     while true {
         let legacy = db.publish_outbox(d, c, 100, a.settings.auth.pg_timeout_ns);
-        let runtime = db.publish_runtime_outbox(d,c,a.node_id,100,a.settings.auth.pg_timeout_ns);
+        let runtime = db.publish_runtime_outbox(d,c,runtime_node(a),100,a.settings.auth.pg_timeout_ns);
         let sent = 0;
         if let n=legacy {
             sent+=n;

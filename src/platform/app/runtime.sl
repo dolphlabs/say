@@ -15,22 +15,70 @@ pub fn order_rate_limited(a: App,account_id: str) -> bool {
 
 pub gc struct RuntimeControl {
     lock: mutex,
+    node_id: str,
     live: bool,
+    supervising: bool,
     active: map[str]bool,
     epochs: map[str]int,
     leases: map[str]int
 }
 
-fn new_runtime_control() -> RuntimeControl {
+fn new_runtime_control(node_id: str) -> RuntimeControl {
     let active:map[str]bool={};
     let epochs:map[str]int={};
     let leases:map[str]int={};
-    return RuntimeControl { lock:make_mutex(),live:true,active:active,epochs:epochs,leases:leases };
+    return RuntimeControl { lock:make_mutex(),node_id:node_id,live:true,supervising:false,active:active,epochs:epochs,leases:leases };
+}
+
+pub fn runtime_node(a: App) -> str {
+    mutex_lock(a.runtime.lock);
+    let node=a.runtime.node_id;
+    mutex_unlock(a.runtime.lock);
+    return node;
+}
+
+pub fn runtime_ready(a: App) -> result[int,str] {
+    mutex_lock(a.runtime.lock);
+    let live=a.runtime.live;
+    mutex_unlock(a.runtime.lock);
+    if !live { return err("exchange runtime is rejoining"); }
+    return ok(0);
+}
+
+// A stall longer than the node's lease (a closed laptop, a paused VM, a slow
+// failover) expires the node, and an expired node may never own a market
+// again. Once this incarnation's tasks have stopped, the process joins again
+// as a new node, so it does not stay up serving HTTP without trading.
+fn rejoin(a: App) -> result[str,str] {
+    while true {
+        mutex_lock(a.runtime.lock);
+        let busy=a.runtime.supervising || len(a.runtime.active)>0;
+        mutex_unlock(a.runtime.lock);
+        if !busy { break; }
+        time.sleep(100000000);
+    }
+    let node=new_uuid();
+    let registered=exchange.register_node(a.ownership,node,"say",a.settings.exchange.lease_seconds);
+    guard let _registered=registered else let e=err_of(registered) { return err(e); }
+    mutex_lock(a.runtime.lock);
+    a.runtime.node_id=node;
+    a.runtime.epochs={};
+    a.runtime.leases={};
+    a.runtime.live=true;
+    mutex_unlock(a.runtime.lock);
+    return ok(node);
+}
+
+fn start_supervisor(a: App) {
+    mutex_lock(a.runtime.lock);
+    a.runtime.supervising=true;
+    mutex_unlock(a.runtime.lock);
+    spawn run_exchange_supervisor(a);
 }
 
 pub fn start_exchange_workers(a: App) {
     spawn run_exchange_heartbeat(a);
-    spawn run_exchange_supervisor(a);
+    start_supervisor(a);
 }
 
 pub fn await_order(a: App,account_id: str,order_id: str,cancel: bool) -> opt[exchange.ReadOrder] {
@@ -96,7 +144,7 @@ fn run_exchange_heartbeat(a: App) -> int {
             let expected_epochs:map[str]int={};
             for i in start..end { push(batch_ids,ids[i]); push(batch_epochs,epochs[i]); expected_epochs[ids[i]]=epochs[i]; }
             let until_ms=time.wall()/1000000+a.settings.exchange.lease_seconds*1000;
-            let outcome=exchange.heartbeat(a.heartbeat_ownership,a.node_id,a.settings.exchange.lease_seconds,batch_ids,batch_epochs);
+            let outcome=exchange.heartbeat(a.heartbeat_ownership,runtime_node(a),a.settings.exchange.lease_seconds,batch_ids,batch_epochs);
             if let beat=outcome {
                 mutex_lock(a.runtime.lock);
                 if !beat.node_live { a.runtime.live=false; }
@@ -109,9 +157,20 @@ fn run_exchange_heartbeat(a: App) -> int {
                 }
                 mutex_unlock(a.runtime.lock);
                 if !beat.node_live {
-                    a.settings.server.logger.error("exchange","runtime node expired; trading tasks stopped");
+                    a.settings.server.logger.error("exchange","runtime node expired; stopping its markets and joining again");
                     metrics.add(a.metrics,"exchange_runtime_node_expired_total",1);
-                    return 0;
+                    while true {
+                        let joined=rejoin(a);
+                        if let node=joined {
+                            a.settings.server.logger.warn("exchange","runtime rejoined as node "+node);
+                            break;
+                        } else let e=err_of(joined) {
+                            a.settings.server.logger.error("exchange","runtime rejoin failed: "+e);
+                            time.sleep(a.settings.exchange.heartbeat_ns);
+                        }
+                    }
+                    start_supervisor(a);
+                    break;
                 }
             } else let e=err_of(outcome) {
                 a.settings.server.logger.warn("exchange","runtime heartbeat failed: "+e);
@@ -130,6 +189,7 @@ fn run_exchange_supervisor(a: App) -> int {
     while true {
         mutex_lock(a.runtime.lock);
         let live=a.runtime.live;
+        if !live { a.runtime.supervising=false; }
         mutex_unlock(a.runtime.lock);
         if !live { return 0; }
         let found=exchange.candidates(a.ownership,after,500);
@@ -152,8 +212,9 @@ fn run_exchange_supervisor(a: App) -> int {
 }
 
 fn run_market_task(a: App,id: str) -> int {
+    let node=runtime_node(a);
     let lease_until=time.wall()/1000000+a.settings.exchange.lease_seconds*1000;
-    let claimed=exchange.acquire(a.ownership,id,a.node_id,a.settings.exchange.lease_seconds);
+    let claimed=exchange.acquire(a.ownership,id,node,a.settings.exchange.lease_seconds);
     let epoch=0;
     if let claim=claimed {
         if claim.acquired || claim.renewed {
@@ -162,7 +223,7 @@ fn run_market_task(a: App,id: str) -> int {
             a.runtime.epochs[id]=epoch;
             a.runtime.leases[id]=lease_until;
             mutex_unlock(a.runtime.lock);
-            let outcome=run_market(a,id,epoch);
+            let outcome=run_market(a,id,epoch,node);
             if let _done=outcome {} else let e=err_of(outcome) {
                 a.settings.server.logger.error("exchange","market stopped for recovery "+id+": "+e);
                 metrics.add(a.metrics,"exchange_runtime_actor_failures_total",1);
@@ -172,7 +233,7 @@ fn run_market_task(a: App,id: str) -> int {
             del(a.runtime.epochs,id);
             del(a.runtime.leases,id);
             mutex_unlock(a.runtime.lock);
-            let released=exchange.release(a.ownership,id,a.node_id,epoch);
+            let released=exchange.release(a.ownership,id,node,epoch);
             if let _released=released {} else let e=err_of(released) {
                 a.settings.server.logger.warn("exchange","market lease release failed for "+id+": "+e);
             }
@@ -186,12 +247,12 @@ fn run_market_task(a: App,id: str) -> int {
     return 0;
 }
 
-fn run_market(a: App,id: str,epoch: int) -> result[bool,str] {
+fn run_market(a: App,id: str,epoch: int,node: str) -> result[bool,str] {
     let recovered=exchange.recover_book(a.recovery_store,id,128);
     guard let book=recovered else let e=err_of(recovered) {
         metrics.add(a.metrics,"exchange_runtime_recovery_failures_total",1);
         if strings.has_prefix(e,"RECOVERY_") {
-            let quarantined=a.recovery_store.quarantine(a.recovery_store.context,id,a.node_id,epoch,e);
+            let quarantined=a.recovery_store.quarantine(a.recovery_store.context,id,node,epoch,e);
             if let _quarantined=quarantined {} else let failure=err_of(quarantined) {
                 a.settings.server.logger.error("exchange","quarantine failed for "+id+": "+failure);
             }
@@ -199,7 +260,7 @@ fn run_market(a: App,id: str,epoch: int) -> result[bool,str] {
         return err(e);
     }
     let workspace=exchange.workspace_for(&book,128);
-    let created=exchange.new_actor(a.actor_writer,book,workspace,a.node_id,epoch);
+    let created=exchange.new_actor(a.actor_writer,book,workspace,node,epoch);
     guard let actor=created else let e=err_of(created) { return err(e); }
     let captured=exchange.snapshot_write(actor);
     guard let snapshot=captured else let e=err_of(captured) { return err(e); }
@@ -233,7 +294,7 @@ fn run_market(a: App,id: str,epoch: int) -> result[bool,str] {
         if len(batch.commands)==0 {
             cursor=batch.frontier;
             if !ready {
-                let marked=exchange.mark_ready(a.ownership,id,a.node_id,epoch);
+                let marked=exchange.mark_ready(a.ownership,id,node,epoch);
                 guard let is_ready=marked else let e=err_of(marked) { return err(e); }
                 ready=is_ready;
             }

@@ -121,4 +121,14 @@ describe('order panel', () => {
     expect(await screen.findByText('That’s more than your S 40 balance.')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Buy Yes · S 100' }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('should add a chip above the balance and say why the buy is blocked', async () => {
+    setup((url) => (url === '/v1/me/portfolio/summary' ? { ...summary, available: 0 } : {}))
+    const amount = (await screen.findByLabelText('Amount')) as HTMLInputElement
+    fireEvent.change(amount, { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: '+100' }))
+    expect(amount.value).toBe('100')
+    expect(await screen.findByText('That’s more than your S 0 balance.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Buy Yes · S 100' }) as HTMLButtonElement).disabled).toBe(true)
+  })
 })

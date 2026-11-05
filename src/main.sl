@@ -72,6 +72,7 @@ web.register_common(r.errors);
 r.health();
 r.ready_check("db", db_ready);
 r.ready_check("cache", cache_ready);
+r.ready_check("exchange", app.runtime_ready);
 accounts.mount(r);
 ledger.mount(r);
 exchange.mount(r);

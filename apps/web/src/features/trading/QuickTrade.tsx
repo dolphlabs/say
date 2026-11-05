@@ -71,7 +71,7 @@ export function QuickTrade({ card, outcome: initial, onClose }: Props) {
   else if (signedIn && available != null && amount > available) [warn, blocked] = [`That’s more than your ${sedi(available)} balance.`, true]
   else if (amount < 10) warn = `Heads up: the S ${fee} fee is a big chunk of a small bet.`
 
-  const bump = (n: number) => setAmount(Math.max(0, available == null ? n : Math.min(available, n)))
+  const bump = (n: number) => setAmount(Math.max(0, n))
   const sideLabel = outcome === 'YES' ? 'Yes' : 'No'
 
   return (
