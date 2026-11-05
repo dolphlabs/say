@@ -166,12 +166,21 @@ pub fn create_bot[C](s: TreasuryService[C], username: str, key_hash: str, key_pr
 }
 
 pub fn issue_bot_key[C](s: TreasuryService[C], bot_id: str, key_hash: str, key_prefix: str) -> result[bool, str] {
+    if !domain.valid_id(bot_id) {
+        return err("INVALID_BOT_ID");
+    }
     return (s.store.issue_bot_key)(s.store.context, bot_id, key_hash, key_prefix);
 }
 
 // A new assignment starts paused with nothing allocated; an operator funds
 // it through a top-up and resumes it.
 pub fn assign_bot[C](s: TreasuryService[C], bot_id: str, market_id: str) -> result[bool, str] {
+    if !domain.valid_id(bot_id) {
+        return err("INVALID_BOT_ID");
+    }
+    if !domain.valid_id(market_id) {
+        return err("INVALID_MARKET_ID");
+    }
     return (s.store.assign_bot)(s.store.context, bot_id, market_id);
 }
 

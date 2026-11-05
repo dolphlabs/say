@@ -50,6 +50,22 @@ fn new_bot_key() -> NewKey {
     return NewKey { key: key, hash: encoding.hex_encode(crypto.sha256(to_bytes(key))), prefix: strings.slice(key, 0, 12) };
 }
 
+fn refusal(e: str, bot: str) -> str {
+    if e == "INVALID_BOT_ID" && strings.has_prefix(bot, "say_bot_") {
+        return "refused: --bot takes the bot's id (the uuid `bot create` printed after \"bot\"), not its key";
+    }
+    if e == "INVALID_BOT_ID" {
+        return "refused: --bot must be the bot's id, a uuid";
+    }
+    if e == "INVALID_MARKET_ID" {
+        return "refused: --market must be the market's id, a uuid";
+    }
+    if e == "NOT_FOUND" {
+        return "refused: no active bot with that id, or no approved, funding, open or suspended market with that id";
+    }
+    return "refused: " + e;
+}
+
 fn run_bot(a: App, args: [str], what: str) -> int {
     if what == "bot create" {
         let k = new_bot_key();
@@ -67,7 +83,7 @@ fn run_bot(a: App, args: [str], what: str) -> int {
         let k = new_bot_key();
         let r = treasury.issue_bot_key(a.treasury, flag(args, "bot"), k.hash, k.prefix);
         guard let _ok = r else let e = err_of(r) {
-            println("refused: " + e);
+            println(refusal(e, flag(args, "bot")));
             return 1;
         }
         println("key " + k.key);
@@ -77,7 +93,7 @@ fn run_bot(a: App, args: [str], what: str) -> int {
     if what == "bot assign" {
         let r = treasury.assign_bot(a.treasury, flag(args, "bot"), flag(args, "market"));
         guard let added = r else let e = err_of(r) {
-            println("refused: " + e);
+            println(refusal(e, flag(args, "bot")));
             return 1;
         }
         if added {

@@ -21,6 +21,20 @@ pub fn season_budget_hash(budget_id: str, season_id: str, cap: int) -> str {
     return encoding.hex_encode(crypto.sha256(to_bytes("bot_season_budget|" + budget_id + "|" + season_id + "|" + to_str(cap))));
 }
 
+pub fn valid_id(s: str) -> bool {
+    let b = to_bytes(s);
+    if len(b) != 36 { return false; }
+    for i in 0..36 {
+        let c = b[i];
+        if i == 8 || i == 13 || i == 18 || i == 23 {
+            if c != 45 { return false; }
+        } else if !((c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 pub fn valid_bot_username(name: str) -> bool {
     let b = to_bytes(name);
     if len(b) < 3 || len(b) > 24 { return false; }

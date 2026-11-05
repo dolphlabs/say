@@ -163,6 +163,24 @@ pub fn test_should_refuse_funding_that_is_not_positive_or_too_large_before_askin
     assert(len(f.calls) == 0);
 }
 
+pub fn test_should_refuse_a_bot_key_or_malformed_id_before_reaching_the_store() {
+    let f = fake_store();
+    let svc = fake_treasury_service(f);
+    let key = assign_bot(svc, "say_bot_000000000000000000000000000000000000000000000000", "00000000-0000-4000-a000-000000000104");
+    if let _a = key { panic("a key was accepted as a bot id"); }
+    else let e = err_of(key) { assert(e == "INVALID_BOT_ID", e); }
+    let market = assign_bot(svc, "3b23c674-10cb-4f5b-8bcb-22e580fca16d", "market-104");
+    if let _a = market { panic("a malformed market id was accepted"); }
+    else let e = err_of(market) { assert(e == "INVALID_MARKET_ID", e); }
+    let reissue = issue_bot_key(svc, "say_bot_abcd", "h", "say_bot_abcd");
+    if let _k = reissue { panic("a key was accepted as a bot id"); }
+    else let e = err_of(reissue) { assert(e == "INVALID_BOT_ID", e); }
+    assert(len(f.calls) == 0);
+    let good = assign_bot(svc, "3B23C674-10CB-4F5B-8BCB-22E580FCA16D", "00000000-0000-4000-a000-000000000104");
+    guard let _added = good else let e = err_of(good) { panic(e); }
+    assert(len(f.calls) == 1);
+}
+
 pub fn test_should_refuse_a_bot_username_the_account_rules_would_reject() {
     let f = fake_store();
     let svc = fake_treasury_service(f);
