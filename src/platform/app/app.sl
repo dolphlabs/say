@@ -75,6 +75,7 @@ pub gc struct App {
     snapshot_queue: chan[exchange.SnapshotWrite],
     reply_slots: chan[int],
     mailer: accounts.Mailer[Postman],
+    notice_sender: notifications_svc.NoticeSender[Postman],
     settings: config.Settings,
     metrics: metrics.Registry,
     db: opt[db.Db],
@@ -105,6 +106,25 @@ fn send_mail(p: Postman, m: accounts.Mail) -> result[bool, str] {
     return email.send(p.email, email.EmailMessage {
         from: p.from, to: [m.to], subject: subject, html: html, text: text, tags: [m.purpose]
     });
+}
+
+fn send_notice(p: Postman, m: notifications_svc.NoticeMail) -> result[bool, str] {
+    let r = templates.Recipient { username: m.username, to: m.to, app_url: p.app_url };
+    let e = templates.NoticeEmail {
+        title: m.subject, body: m.body, link_path: m.link_url,
+        unsubscribe_url: p.app_url + "/v1/unsubscribe?token=" + m.unsubscribe_token
+    };
+    return email.send(p.email, email.EmailMessage {
+        from: p.from, to: [m.to], subject: m.subject,
+        html: templates.notice_email_html(r, e), text: templates.notice_email_text(r, e), tags: ["notice"]
+    });
+}
+
+pub fn notice_sender_on(e: email.Email, from: str, app_url: str) -> notifications_svc.NoticeSender[Postman] {
+    return notifications_svc.NoticeSender[Postman] {
+        context: Postman { email: e, from: from, app_url: without_trailing_slash(app_url) },
+        send: send_notice
+    };
 }
 
 fn without_trailing_slash(u: str) -> str {
@@ -242,6 +262,7 @@ fn wire(s: config.Settings, d: db.Db, c: cache.Cache, mail: email.Email) -> resu
         snapshot_queue: snapshot_queue,
         reply_slots: make_chan(s.exchange.max_waiters),
         mailer: mailer_on(mail, s.email.from, s.auth.app_url),
+        notice_sender: notice_sender_on(mail, s.email.from, s.auth.app_url),
         settings: s,
         metrics: metrics.new_registry(),
         db: some(d),
@@ -313,11 +334,13 @@ pub fn public_market_exists(a: App, market_id: str) -> result[bool,str] {
     return ok(false);
 }
 
-pub fn get_portfolio_market_stats(a: App) -> map[str]portfolio_svc.MarketPriceStats {
+// Prices for valuing positions. Without them every position would be
+// valued at nothing, so a failed snapshot is an error, not an empty map.
+pub fn get_portfolio_market_stats(a: App) -> result[map[str]portfolio_svc.MarketPriceStats, str] {
     let out: map[str]portfolio_svc.MarketPriceStats = {};
     let snap_res = markets.snapshot(a.markets);
-    guard let snap = snap_res else {
-        return out;
+    guard let snap = snap_res else let f = err_of(snap_res) {
+        return err("market snapshot: " + inspect(f));
     }
     for item in snap.stats {
         let has_last = false;
@@ -347,7 +370,7 @@ pub fn get_portfolio_market_stats(a: App) -> map[str]portfolio_svc.MarketPriceSt
             has_best_ask: has_ask
         };
     }
-    return out;
+    return ok(out);
 }
 
 pub fn build(s: config.Settings, d: db.Db, c: cache.Cache) -> result[App, str] {
@@ -375,7 +398,9 @@ pub fn market_roles(a: App, id: str) -> result[[str], str] {
 // without knowing the accounts feature.
 pub gc struct Caller {
     account_id: str,
-    session_hash: str
+    session_hash: str,
+    owner_kind: str,
+    owner_group: str
 }
 
 pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
@@ -387,8 +412,8 @@ pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
             guard let found_opt = lk else let e = err_of(lk) {
                 return err(e);
             }
-            if let bot_id = found_opt {
-                return ok(some(Caller { account_id: bot_id, session_hash: h }));
+            if let key = found_opt {
+                return ok(some(Caller { account_id: key.bot_id, session_hash: h, owner_kind: "bot", owner_group: key.owner_group }));
             }
         }
         return ok(none_caller);
@@ -400,7 +425,7 @@ pub fn authenticate(a: App, token: str) -> result[opt[Caller], str] {
     guard let s = found else {
         return ok(none_caller);
     }
-    return ok(some(Caller { account_id: s.account_id, session_hash: encoding.hex_encode(s.token_hash) }));
+    return ok(some(Caller { account_id: s.account_id, session_hash: encoding.hex_encode(s.token_hash), owner_kind: "user", owner_group: "" }));
 }
 
 fn drain_problems(a: App) -> int {
@@ -564,8 +589,11 @@ pub fn start_workers(a: App) {
     }
     start_stream_workers(a);
     spawn run_closing_soon_scheduler(a);
+    spawn run_notice_email_worker(a);
+    spawn run_funding_worker(a);
+    spawn run_deletion_worker(a);
     spawn run_resolution_watchers(a);
-    spawn standings_svc.run_standings_worker(a.standings);
+    spawn run_standings_worker(a);
 }
 
 fn run_resolution_watchers(a: App) -> int {
@@ -578,8 +606,95 @@ fn run_resolution_watchers(a: App) -> int {
 
 fn run_closing_soon_scheduler(a: App) -> int {
     while true {
-        time.sleep(30000000000); // 30s
-        let _ = notifications_svc.poll_closing_soon(a.notifications);
+        time.sleep(30000000000);
+        let r = notifications_svc.poll_closing_soon(a.notifications);
+        guard let _n = r else let e = err_of(r) {
+            a.settings.server.logger.error("notifications", e);
+            continue;
+        }
+    }
+    return 0;
+}
+
+// Applies approved bot top-ups and season budgets; every check that can
+// refuse one runs again inside the transaction that moves the money.
+fn run_funding_worker(a: App) -> int {
+    while true {
+        time.sleep(10000000000);
+        let r = treasury.apply_funding(a.treasury);
+        guard let report = r else let e = err_of(r) {
+            a.settings.server.logger.error("treasury", "funding round failed: " + e);
+            continue;
+        }
+        for p in report.problems {
+            a.settings.server.logger.warn("treasury", p);
+        }
+    }
+    return 0;
+}
+
+// Finishes deletions: cancels a deleting account's live orders through the
+// exchange and anonymises it only once none remain. Anything that fails is
+// logged and retried on the next round.
+fn run_deletion_worker(a: App) -> int {
+    while true {
+        time.sleep(15000000000);
+        let r = accounts.deleting_accounts(a.accounts, 50);
+        guard let ids = r else let e = err_of(r) {
+            a.settings.server.logger.error("accounts", "listing deletions failed: " + e);
+            continue;
+        }
+        for id in ids {
+            let open = exchange.read_open_markets(a.exchange_reads, id);
+            guard let markets_open = open else let e = err_of(open) {
+                a.settings.server.logger.error("accounts", "deletion " + id + ": reading orders failed: " + e);
+                continue;
+            }
+            if len(markets_open) > 0 {
+                for m in markets_open {
+                    let c = exchange.enqueue_cancel_all(a.command_queue, m, id, new_uuid());
+                    if let _q = c {
+                    } else let e = err_of(c) {
+                        a.settings.server.logger.warn("accounts", "deletion " + id + ": cancel in " + m + " failed: " + e);
+                    }
+                }
+                continue;
+            }
+            let done = accounts.finish_deletion(a.accounts, id);
+            if let _d = done {
+            } else let e = err_of(done) {
+                a.settings.server.logger.error("accounts", "deletion " + id + ": anonymising failed: " + e);
+            }
+        }
+    }
+    return 0;
+}
+
+// The refresh time is stored as when a profit was reached, the leaderboard's
+// tie-break, so it is wall-clock time shared by every node and restart.
+fn run_standings_worker(a: App) -> int {
+    while true {
+        let r = standings_svc.refresh_snapshot(a.standings, (time.wall() / 1000000) as int);
+        if let _ok = r {
+        } else let e = err_of(r) {
+            a.settings.server.logger.error("standings", "refresh failed: " + e);
+        }
+        time.sleep(30000000000);
+    }
+    return 0;
+}
+
+fn run_notice_email_worker(a: App) -> int {
+    while true {
+        time.sleep(5000000000);
+        let r = notifications_svc.deliver_emails(a.notifications, a.notice_sender, (time.wall() / 1000000000) as int);
+        guard let report = r else let e = err_of(r) {
+            a.settings.server.logger.error("notifications", "email claim failed: " + e);
+            continue;
+        }
+        for p in report.problems {
+            a.settings.server.logger.warn("notifications", p);
+        }
     }
     return 0;
 }

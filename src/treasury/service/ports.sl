@@ -11,10 +11,25 @@ pub gc struct TreasuryStore[C] {
     is_all_paused: fn(C) -> result[bool, str],
     update_params: fn(C, str, str, domain.BotParams, str, int) -> result[int, str],
     get_params: fn(C, str, str) -> result[opt[domain.BotParams], str],
-    topup_budget: fn(C, str, str, str, int, str, str) -> result[bool, str],
-    propose_season_budget: fn(C, str, int, str, str) -> result[str, str],
-    record_heartbeat: fn(C, domain.HeartbeatPayload) -> result[str, str],
+    request_topup: fn(C, str, str, int, str, str) -> result[FundingRequest, str],
+    request_season_budget: fn(C, str, int, str, str) -> result[FundingRequest, str],
+    apply_funding: fn(C) -> result[FundingReport, str],
+    create_bot: fn(C, str, str, str) -> result[str, str],
+    issue_bot_key: fn(C, str, str, str) -> result[bool, str],
+    assign_bot: fn(C, str, str) -> result[bool, str],
+    record_heartbeat: fn(C, domain.HeartbeatPayload) -> result[domain.BotDirective, str],
     bot_ids: fn(C) -> result[[str], str]
+}
+
+pub gc struct FundingRequest {
+    id: str,
+    approval_ids: [str]
+}
+
+pub gc struct FundingReport {
+    applied: int,
+    rejected: int,
+    problems: [str]
 }
 
 // The exchange owns orders, so pulling a bot's quotes goes through its

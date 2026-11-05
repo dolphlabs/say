@@ -1,5 +1,6 @@
 import "zokor";
 import "../domain" as domain;
+import "../service" as treasury_svc;
 
 pub gc struct PauseReasonDto {
     reason: str
@@ -127,4 +128,27 @@ pub fn decision_json(d: domain.BotDecisionRecord) -> zokor.Json {
     j.set_int("worst_case_loss", d.worst_case_loss);
     j.set_str("status", d.status);
     return j;
+}
+
+pub fn directive_json(d: domain.BotDirective) -> zokor.Json {
+    let p = d.params;
+    return zokor.jobj()
+        .set_str("status", d.status)
+        .set_int("allocated", d.allocated)
+        .set_bool("trading_halted", d.trading_halted)
+        .set_int("params_version", d.params_version)
+        .set("params", zokor.jobj()
+            .set_int("base_spread_ticks", p.base_spread_ticks).set_int("vol_ticks", p.vol_ticks)
+            .set_int("skew_ticks", p.skew_ticks).set_int("levels", p.levels).set_int("base_size", p.base_size)
+            .set_int("max_net_shares", p.max_net_shares).set_int("max_loss", p.max_loss)
+            .set_int("season_max_drawdown", p.season_max_drawdown).set_int("min_requote_ms", p.min_requote_ms)
+            .set_int("max_ops_per_sec", p.max_ops_per_sec).set_int("max_open_orders", p.max_open_orders));
+}
+
+pub fn funding_json(r: treasury_svc.FundingRequest, id_key: str) -> zokor.Json {
+    let ids = zokor.jarr();
+    for a in r.approval_ids {
+        ids.add_str(a);
+    }
+    return zokor.jobj().set_str(id_key, r.id).set("approval_ids", ids).set_str("status", "PENDING_APPROVAL");
 }

@@ -399,7 +399,60 @@ function TwoFactor() {
   )
 }
 
-function SignOut() {
+function DeleteAccount({ user }: { user: User }) {
+  const client = useQueryClient()
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const [typed, setTyped] = useState('')
+  const remove = useMutation({
+    mutationFn: () => send('DELETE', '/v1/me'),
+    onSuccess: async () => {
+      await endSession(client)
+      void navigate({ to: '/' })
+    },
+  })
+  const confirmed = typed.trim().toLowerCase() === user.username.toLowerCase()
+  return (
+    <div className="setting-row danger-zone">
+      <div className="grow">
+        <div className="strong danger-text">Delete account</div>
+        <div className="muted small">
+          Signs you out everywhere and cancels your open orders. Your username, email, photo and sign-in details are then removed for good. Past trades stay in the records without your name.
+        </div>
+        {open && (
+          <form
+            className="stack small-gap"
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault()
+              if (confirmed) remove.mutate()
+            }}
+          >
+            <label htmlFor="delete-confirm" className="small">
+              Type <strong>{user.username}</strong> to confirm
+            </label>
+            <input id="delete-confirm" className="input" autoComplete="off" value={typed} onChange={(e: ChangeEvent<HTMLInputElement>) => setTyped(e.target.value)} />
+            <div className="row wrap">
+              <button type="submit" className="button outline-red small" disabled={!confirmed || remove.isPending}>
+                Delete my account
+              </button>
+              <button type="button" className="button ghost small" onClick={() => { setOpen(false); setTyped('') }}>
+                Keep my account
+              </button>
+            </div>
+            <Notice error={remove.error ? errorMessage(remove.error) : undefined} />
+          </form>
+        )}
+      </div>
+      {!open && (
+        <button type="button" className="button outline-red small" onClick={() => setOpen(true)}>
+          Delete account
+        </button>
+      )}
+    </div>
+  )
+}
+
+function SignOut({ user }: { user: User }) {
   const client = useQueryClient()
   const navigate = useNavigate()
   const [others, setOthers] = useState(false)
@@ -428,15 +481,7 @@ function SignOut() {
         </p>
       )}
       <Notice error={logoutOthers.error ? errorMessage(logoutOthers.error) : undefined} />
-      <div className="setting-row danger-zone">
-        <div className="grow">
-          <div className="strong danger-text">Delete account</div>
-          <div className="muted small">Not available yet. Open orders have to be cancelled reliably before an account can be removed; contact support if you need this now.</div>
-        </div>
-        <button type="button" className="button outline-red small" disabled>
-          Delete account
-        </button>
-      </div>
+      <DeleteAccount user={user} />
     </section>
   )
 }
@@ -454,7 +499,7 @@ export function Settings({ user }: { user: User }) {
       </section>
       <Notifications />
       {isStaff(user) && <TwoFactor />}
-      <SignOut />
+      <SignOut user={user} />
     </div>
   )
 }

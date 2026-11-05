@@ -219,25 +219,29 @@ pub fn revoke_role[C](a: Auth[C], account_id: str, role: str) -> result[bool, st
     return f(st.context, account_id, role);
 }
 
-pub fn open_markets_for_account[C](a: Auth[C], account_id: str) -> result[[str], str] {
+pub fn request_deletion[C](a: Auth[C], account_id: str) -> result[bool, str] {
     let st_r = get_settings_store(a);
     guard let st = st_r else let e = err_of(st_r) { return err(e); }
-    let f = st.open_markets_for_account;
-    return f(st.context, account_id);
+    let r = (st.begin_deletion)(st.context, account_id);
+    guard let hashes = r else let e = err_of(r) { return err(e); }
+    forget_sessions(a, hashes);
+    return ok(true);
 }
 
-pub fn anonymise_account[C](a: Auth[C], account_id: str) -> result[[bytes], str] {
+pub fn deleting_accounts[C](a: Auth[C], limit: int) -> result[[str], str] {
     let st_r = get_settings_store(a);
     guard let st = st_r else let e = err_of(st_r) { return err(e); }
+    return (st.deleting_accounts)(st.context, limit);
+}
 
-    let rand_b = crypto.rand(3);
-    let rnd_hex = "123456";
-    if let rb = rand_b { rnd_hex = encoding.hex_encode(rb); }
-    let anon_user = "deleted-" + rnd_hex;
-    let anon_email = "deleted-" + account_id + "@deleted.local";
-
-    let f = st.anonymise_account;
-    return f(st.context, account_id, anon_user, anon_email);
+// Called only once the account has no live orders. The username is random
+// and unguessable, so it never collides and reveals nothing.
+pub fn finish_deletion[C](a: Auth[C], account_id: str) -> result[bool, str] {
+    let st_r = get_settings_store(a);
+    guard let st = st_r else let e = err_of(st_r) { return err(e); }
+    let rb = crypto.rand(8);
+    guard let b = rb else let e = err_of(rb) { return err(e); }
+    return (st.anonymise_account)(st.context, account_id, "deleted_" + encoding.hex_encode(b));
 }
 
 pub fn avatar_keys(cloud_name: str, api_key: str, api_secret: str) -> domain.AvatarKeys {

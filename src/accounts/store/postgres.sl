@@ -779,3 +779,19 @@ fn st_grant_role(s: Store, id: str, role: str) -> result[bool, service.StoreFail
     }
     return ok(len(rows) == 1);
 }
+
+gc struct NewBotRow {
+    id: str
+}
+
+// Bot accounts have no password, email or grant, and stay off the
+// leaderboard; the treasury creates them in the same transaction as the key.
+pub fn insert_bot_account(c: pg.Conn, username: str, owner_group: str, d: until) -> result[str, str] {
+    let r: result[[NewBotRow], str] = zokor.conn_query_all(c,
+        "insert into accounts (username, kind, status, leaderboard_eligible, beneficial_owner_group) " +
+        "values ($1, 'BOT', 'ACTIVE', false, $2::uuid) on conflict (username) do nothing returning id::text as id",
+        [pg.arg_text(username), pg.arg_text(owner_group)], d);
+    guard let rows = r else let e = err_of(r) { return err(e); }
+    if len(rows) != 1 { return err("USERNAME_TAKEN"); }
+    return ok(rows[0].id);
+}

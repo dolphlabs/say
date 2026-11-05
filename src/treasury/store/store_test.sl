@@ -160,20 +160,21 @@ fn test_should_keep_an_operator_pause_whatever_a_heartbeat_reports() {
 
     let manual = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000002", "QUOTING"));
     guard let kept = manual else let e = err_of(manual) { panic(e); }
-    assert(kept == "PAUSED_MANUAL", kept);
+    assert(kept.status == "PAUSED_MANUAL", kept.status);
+    assert(!kept.trading_halted);
     assert(read_test_value(db.owner, "select status_reason as val from bot_markets where bot_id='00000000-0000-4000-8000-000000000002'") == "operator pause");
     assert(read_test_value(db.owner, "select used::text as val from bot_markets where bot_id='00000000-0000-4000-8000-000000000002'") == "40");
 
     run_test_sql(db.owner, "update trading_halt set bots_paused=true where id=1");
     let global = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000003", "QUOTING"));
     guard let held = global else let e = err_of(global) { panic(e); }
-    assert(held == "PAUSED_ALL", held);
+    assert(held.status == "PAUSED_ALL", held.status);
 
     run_test_sql(db.owner, "update trading_halt set bots_paused=false where id=1");
     run_test_sql(db.owner, "update bot_markets set status='PULLED_STALE' where bot_id='00000000-0000-4000-8000-000000000003'");
     let free = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000003", "QUOTING"));
     guard let quoting = free else let e = err_of(free) { panic(e); }
-    assert(quoting == "QUOTING", quoting);
+    assert(quoting.status == "QUOTING", quoting.status);
 
     let stranger = pg_record_heartbeat(store, bot_heartbeat("00000000-0000-4000-8000-000000000001", "QUOTING"));
     if let _s = stranger { panic("a heartbeat for a bot with no row was accepted"); }
@@ -182,5 +183,117 @@ fn test_should_keep_an_operator_pause_whatever_a_heartbeat_reports() {
     let missing = pg_set_status(store, "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000005", "PAUSED_MANUAL", "x");
     if let _s = missing { panic("pausing an unknown bot succeeded"); }
     else let e = err_of(missing) { assert(e == "NOT_FOUND", e); }
+    close_summary_db(db);
+}
+
+fn topup_status(db: SummaryDb, id: str) -> str {
+    let deadline = until_of(time.mono() + 30000000000);
+    let r: result[[TestText], str] = zokor.query_all(db.owner,
+        "select status || ':' || status_reason as val from bot_topups where id = $1::uuid", [pg.arg_text(id)], deadline);
+    guard let rows = r else let e = err_of(r) { panic(e); }
+    assert(len(rows) == 1);
+    return rows[0].val;
+}
+
+fn approve_as(db: SummaryDb, approval_id: str, approver: str) {
+    let deadline = until_of(time.mono() + 30000000000);
+    let r = pg.pool_query(db.owner,
+        "with d as (insert into approval_decisions(approval_id,decided_by,decision,note,decided_at) values ($1::uuid,$2::uuid,'approved','',now()) returning id) " +
+        "update approval_state s set status='approved', decision_id=d.id, version=version+1 from d where s.approval_id=$1::uuid",
+        [pg.arg_text(approval_id), pg.arg_text(approver)], deadline);
+    guard let _ok = r else let e = err_of(r) { panic(e); }
+}
+
+fn funding_fixture(db: SummaryDb) -> PostgresTreasuryStore {
+    run_test_sql(db.owner, "insert into accounts(id,username,status,kind) values ('00000000-0000-4000-8000-000000000001','op_one','ACTIVE','USER'),('00000000-0000-4000-8000-000000000002','op_two','ACTIVE','USER'),('00000000-0000-4000-8000-000000000003','op_three','ACTIVE','USER')");
+    run_test_sql(db.owner, "insert into seasons(id,ordinal,starts_at,ends_at,status) values ('00000000-0000-4000-8000-000000000004',999,'2099-01-01T00:00:00Z','2099-01-15T00:00:00Z','ACTIVE')");
+    run_test_sql(db.owner, "insert into wallets (season_id, owner_kind, owner_id, asset_key) select '00000000-0000-4000-8000-000000000004', 'system', o, 'SEDI' from unnest(array['system:issuance','system:fees','system:treasury']) as o");
+    run_test_sql(db.owner, "alter table markets drop constraint markets_submitted_complete");
+    run_test_sql(db.owner, "insert into markets(id,slug,status,created_by,tick,season_id) values ('00000000-0000-4000-8000-000000000005','fund-market','APPROVED','00000000-0000-4000-8000-000000000001',1,'00000000-0000-4000-8000-000000000004')");
+    return make_postgres_treasury_store(db.app);
+}
+
+fn test_should_provision_a_bot_with_a_rotatable_key_and_a_paused_assignment() {
+    guard let db = summary_db() else { return; }
+    let store = funding_fixture(db);
+    let made = pg_create_bot(store, "mm_test_01", "hash-one", "say_bot_aaaa");
+    guard let bot = made else let e = err_of(made) { panic(e); }
+    assert(read_test_value(db.owner, "select kind || ':' || leaderboard_eligible::text as val from accounts where username = 'mm_test_01'") == "BOT:false");
+    assert(read_test_value(db.owner, "select beneficial_owner_group::text as val from accounts where username = 'mm_test_01'") == domain.house_group());
+    let dup = pg_create_bot(store, "mm_test_01", "hash-two", "say_bot_bbbb");
+    if let _d = dup { panic("a taken username made a second bot"); }
+
+    let rotated = pg_issue_bot_key(store, bot, "hash-three", "say_bot_cccc");
+    guard let _r = rotated else let e = err_of(rotated) { panic(e); }
+    assert(read_test_value(db.owner, "select string_agg(key_hash, ',' order by created_at) as val from bot_api_keys where revoked_at is null") == "hash-three");
+    let not_bot = pg_issue_bot_key(store, "00000000-0000-4000-8000-000000000001", "h", "say_bot_dddd");
+    if let _n = not_bot { panic("issued a bot key to a player"); }
+
+    let first = pg_assign_bot(store, bot, "00000000-0000-4000-8000-000000000005");
+    guard let added = first else let e = err_of(first) { panic(e); }
+    assert(added);
+    assert(read_test_value(db.owner, "select status || ':' || allocated::text as val from bot_markets") == "PAUSED_MANUAL:0");
+    let again = pg_assign_bot(store, bot, "00000000-0000-4000-8000-000000000005");
+    guard let added_again = again else let e = err_of(again) { panic(e); }
+    assert(!added_again);
+    close_summary_db(db);
+}
+
+fn test_should_move_bot_money_only_after_approval_and_within_the_season_budget() {
+    guard let db = summary_db() else { return; }
+    let store = funding_fixture(db);
+    let made = pg_create_bot(store, "mm_test_02", "hash-x", "say_bot_xxxx");
+    guard let bot = made else let e = err_of(made) { panic(e); }
+    let market = "00000000-0000-4000-8000-000000000005";
+    let assigned = pg_assign_bot(store, bot, market);
+    guard let _a = assigned else let e = err_of(assigned) { panic(e); }
+
+    let early = pg_request_topup(store, bot, market, 400, "00000000-0000-4000-8000-000000000001", "seed liquidity");
+    guard let t1 = early else let e = err_of(early) { panic(e); }
+    let idle = pg_apply_funding(store);
+    guard let r0 = idle else let e = err_of(idle) { panic(e); }
+    assert(r0.applied == 0 && r0.rejected == 0, "an unapproved top-up was applied");
+
+    approve_as(db, t1.approval_ids[0], "00000000-0000-4000-8000-000000000002");
+    let no_budget = pg_apply_funding(store);
+    guard let r1 = no_budget else let e = err_of(no_budget) { panic(e); }
+    assert(r1.rejected == 1, to_str(r1.rejected));
+    assert(topup_status(db, t1.id) == "REJECTED:no approved bot budget for this season", topup_status(db, t1.id));
+
+    let budget = pg_request_season_budget(store, "00000000-0000-4000-8000-000000000004", 1000, "00000000-0000-4000-8000-000000000001", "launch");
+    guard let b = budget else let e = err_of(budget) { panic(e); }
+    assert(len(b.approval_ids) == 2);
+    approve_as(db, b.approval_ids[0], "00000000-0000-4000-8000-000000000002");
+    let half = pg_apply_funding(store);
+    guard let _h = half else let e = err_of(half) { panic(e); }
+    assert(read_test_value(db.owner, "select status as val from bot_season_budgets") == "PENDING");
+    approve_as(db, b.approval_ids[1], "00000000-0000-4000-8000-000000000003");
+
+    let t2r = pg_request_topup(store, bot, market, 700, "00000000-0000-4000-8000-000000000001", "seed liquidity");
+    guard let t2 = t2r else let e = err_of(t2r) { panic(e); }
+    let t3r = pg_request_topup(store, bot, market, 400, "00000000-0000-4000-8000-000000000001", "more");
+    guard let t3 = t3r else let e = err_of(t3r) { panic(e); }
+    approve_as(db, t2.approval_ids[0], "00000000-0000-4000-8000-000000000002");
+    approve_as(db, t3.approval_ids[0], "00000000-0000-4000-8000-000000000002");
+
+    let applied = pg_apply_funding(store);
+    guard let r2 = applied else let e = err_of(applied) { panic(e); }
+    assert(len(r2.problems) == 0, r2.problems[0]);
+    assert(r2.applied == 2, to_str(r2.applied));
+    assert(r2.rejected == 1, to_str(r2.rejected));
+    assert(read_test_value(db.owner, "select status as val from bot_season_budgets") == "APPLIED");
+    assert(read_test_value(db.owner, "select allocated::text as val from bot_markets") == "700");
+    assert(strings.has_prefix(topup_status(db, t3.id), "REJECTED:would exceed the season bot budget of 1000"), topup_status(db, t3.id));
+    assert(read_test_value(db.owner, "select count(*)::text as val from ledger_transactions where kind = 'BOT_FUNDING'") == "1");
+    assert(read_test_value(db.owner, "select coalesce(sum(e.delta),0)::text as val from ledger_entries e join wallets w on w.id = e.wallet_id where w.owner_kind = 'bot' and w.asset_key = 'SEDI'") == "700");
+
+    let replay = pg_apply_funding(store);
+    guard let r3 = replay else let e = err_of(replay) { panic(e); }
+    assert(r3.applied == 0 && r3.rejected == 0);
+    assert(read_test_value(db.owner, "select allocated::text as val from bot_markets") == "700");
+
+    let summary = pg_get_summary(store, "");
+    guard let sum = summary else let e = err_of(summary) { panic(e); }
+    assert((sum.bot_budget.cap ?? 0) == 1000);
     close_summary_db(db);
 }

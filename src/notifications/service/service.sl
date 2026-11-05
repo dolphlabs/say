@@ -63,6 +63,8 @@ pub fn unsubscribe[C](
     return (s.store.unsubscribe_email)(s.store.context, tok.account_id, tok.kind);
 }
 
+// A market is marked sent only once its fan-out has finished, so a failed
+// round is picked up again by the next poll and resumes where it stopped.
 pub fn poll_closing_soon[C](
     s: NotificationService[C]
 ) -> result[int, str] {
@@ -72,18 +74,47 @@ pub fn poll_closing_soon[C](
     }
 
     let count = 0;
+    let failed = 0;
+    let first = "";
     for m in markets {
-        let mark_res = (s.store.mark_closing_soon_sent)(s.store.context, m.market_id);
-        if let _ = mark_res {
-            let notice = domain.closing_soon_template(m.question, m.close_at_wat);
-            let job_res = (s.store.create_fanout_job)(s.store.context, "closing_soon", m.market_id);
-            if let job = job_res {
-                let _ = process_fanout(s, job.id, "closing_soon", m.market_id, notice.title, notice.body, notice.link_url);
-            }
-            count = count + 1;
+        let notice = domain.closing_soon_template(m.question, m.close_at_wat);
+        let fan = fan_out(s, "closing_soon", m.market_id, notice.title, notice.body, "/markets/" + m.market_id);
+        guard let _n = fan else let e = err_of(fan) {
+            failed += 1;
+            if len(first) == 0 { first = m.market_id + ": " + e; }
+            continue;
         }
+        let mark_res = (s.store.mark_closing_soon_sent)(s.store.context, m.market_id);
+        guard let _m = mark_res else let e = err_of(mark_res) {
+            failed += 1;
+            if len(first) == 0 { first = m.market_id + ": " + e; }
+            continue;
+        }
+        count += 1;
+    }
+    if failed > 0 {
+        return err("closing_soon: " + to_str(failed) + " market(s) failed, first " + first);
     }
     return ok(count);
+}
+
+// Creates the job for (kind, subject), or resumes the one already there.
+pub fn fan_out[C](
+    s: NotificationService[C],
+    kind: str,
+    subject: str,
+    title: str,
+    body: str,
+    link_url: str
+) -> result[int, str] {
+    let job_res = (s.store.create_fanout_job)(s.store.context, kind, subject);
+    guard let job = job_res else let e = err_of(job_res) {
+        return err(e);
+    }
+    if job.done {
+        return ok(0);
+    }
+    return process_fanout(s, job.id, kind, subject, job.cursor, title, body, link_url);
 }
 
 pub fn process_fanout[C](
@@ -91,11 +122,12 @@ pub fn process_fanout[C](
     job_id: str,
     kind: str,
     subject: str,
+    start_cursor: str,
     title: str,
     body: str,
     link_url: str
 ) -> result[int, str] {
-    let cursor = "";
+    let cursor = start_cursor;
     let batch_size = 1000;
     let total_notified = 0;
 
@@ -103,11 +135,6 @@ pub fn process_fanout[C](
         let recips_res = (s.store.find_job_recipients)(s.store.context, kind, subject, cursor, batch_size);
         guard let recips = recips_res else let e = err_of(recips_res) {
             return err(e);
-        }
-
-        if len(recips) == 0 {
-            let _ = (s.store.complete_job)(s.store.context, job_id);
-            break;
         }
 
         let notices: [NoticeToWrite] = [];
@@ -136,23 +163,68 @@ pub fn process_fanout[C](
                     recipient_email: r.email,
                     subject: title,
                     body_text: body,
-                    body_html: "<p>" + body + "</p>"
+                    link_url: link_url
                 });
             }
         }
 
-        let write_res = (s.store.write_notification_batch)(s.store.context, job_id, notices, emails, next_cursor);
-        guard let written = write_res else let e = err_of(write_res) {
-            return err(e);
+        if len(recips) > 0 {
+            let write_res = (s.store.write_notification_batch)(s.store.context, job_id, notices, emails, next_cursor);
+            guard let written = write_res else let e = err_of(write_res) {
+                return err(e);
+            }
+            total_notified = total_notified + written;
+            cursor = next_cursor;
         }
-        total_notified = total_notified + written;
-        cursor = next_cursor;
 
         if len(recips) < batch_size {
-            let _ = (s.store.complete_job)(s.store.context, job_id);
+            let done = (s.store.complete_job)(s.store.context, job_id);
+            guard let _d = done else let e = err_of(done) {
+                return err(e);
+            }
             break;
         }
     }
 
     return ok(total_notified);
+}
+
+pub gc struct DeliveryReport {
+    sent: int,
+    problems: [str]
+}
+
+// Rows are claimed with a lease, so two nodes never send the same email
+// while either is still inside it; a failed send is retried with backoff
+// until email_max_attempts.
+pub fn deliver_emails[C, M](s: NotificationService[C], m: NoticeSender[M], now_s: int) -> result[DeliveryReport, str] {
+    let claimed = (s.store.claim_emails)(s.store.context, 20, 120);
+    guard let due = claimed else let e = err_of(claimed) {
+        return err(e);
+    }
+    let problems: [str] = [];
+    let sent = 0;
+    for d in due {
+        let token = domain.sign_unsubscribe_token(s.secret, d.account_id, d.kind, now_s + domain.unsubscribe_ttl_seconds());
+        let outcome = (m.send)(m.context, NoticeMail {
+            to: d.email, username: d.username, subject: d.subject, body: d.body_text,
+            link_url: d.link_url, unsubscribe_token: token
+        });
+        if let _ok = outcome {
+            let done = (s.store.email_sent)(s.store.context, d.id);
+            if let _d = done {
+                sent += 1;
+            } else let e = err_of(done) {
+                push(problems, "email " + d.id + " sent but not marked: " + e);
+            }
+        } else let e = err_of(outcome) {
+            let retry = (s.store.email_retry)(s.store.context, d.id, e, domain.email_backoff_seconds(d.attempts));
+            push(problems, "email " + d.id + " attempt " + to_str(d.attempts) + " failed: " + e);
+            if let _r = retry {
+            } else let re = err_of(retry) {
+                push(problems, "email " + d.id + " retry not recorded: " + re);
+            }
+        }
+    }
+    return ok(DeliveryReport { sent: sent, problems: problems });
 }

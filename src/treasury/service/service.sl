@@ -123,19 +123,20 @@ pub fn patch_params[C](
     return (s.store.update_params)(s.store.context, bot_id, market_id, params, operator_id, expected_version);
 }
 
+// A top-up only asks for money: nothing moves until another operator
+// approves it and the funding worker applies it within the season budget.
 pub fn topup_budget[C](
     s: TreasuryService[C],
-    season_id: str,
     bot_id: str,
     market_id: str,
     amount: int,
     operator_id: str,
     reason: str
-) -> result[bool, str] {
-    if amount <= 0 {
-        return err("amount must be positive");
+) -> result[FundingRequest, str] {
+    if amount <= 0 || amount > domain.max_funding_amount() || !domain.valid_reason(reason) {
+        return err("INVALID_FUNDING");
     }
-    return (s.store.topup_budget)(s.store.context, season_id, bot_id, market_id, amount, operator_id, reason);
+    return (s.store.request_topup)(s.store.context, bot_id, market_id, amount, operator_id, reason);
 }
 
 pub fn propose_season_budget[C](
@@ -144,21 +145,55 @@ pub fn propose_season_budget[C](
     amount: int,
     operator_id: str,
     reason: str
-) -> result[str, str] {
-    if amount <= 0 {
-        return err("amount must be positive");
+) -> result[FundingRequest, str] {
+    if amount <= 0 || amount > domain.max_funding_amount() || !domain.valid_reason(reason) {
+        return err("INVALID_FUNDING");
     }
-    return (s.store.propose_season_budget)(s.store.context, season_id, amount, operator_id, reason);
+    return (s.store.request_season_budget)(s.store.context, season_id, amount, operator_id, reason);
+}
+
+pub fn apply_funding[C](s: TreasuryService[C]) -> result[FundingReport, str] {
+    return (s.store.apply_funding)(s.store.context);
+}
+
+// The key itself never reaches the store, only its hash and a prefix to
+// recognise it by.
+pub fn create_bot[C](s: TreasuryService[C], username: str, key_hash: str, key_prefix: str) -> result[str, str] {
+    if !domain.valid_bot_username(username) {
+        return err("INVALID_USERNAME");
+    }
+    return (s.store.create_bot)(s.store.context, username, key_hash, key_prefix);
+}
+
+pub fn issue_bot_key[C](s: TreasuryService[C], bot_id: str, key_hash: str, key_prefix: str) -> result[bool, str] {
+    return (s.store.issue_bot_key)(s.store.context, bot_id, key_hash, key_prefix);
+}
+
+// A new assignment starts paused with nothing allocated; an operator funds
+// it through a top-up and resumes it.
+pub fn assign_bot[C](s: TreasuryService[C], bot_id: str, market_id: str) -> result[bool, str] {
+    return (s.store.assign_bot)(s.store.context, bot_id, market_id);
 }
 
 // The bot reports what it is doing, never that it is paused: pauses are an
 // operator's decision, and the store keeps them whatever a heartbeat says.
-pub fn record_heartbeat[C](s: TreasuryService[C], payload: domain.HeartbeatPayload) -> result[str, str] {
+pub fn record_heartbeat[C](s: TreasuryService[C], payload: domain.HeartbeatPayload) -> result[domain.BotDirective, str] {
     if len(payload.market_id) != 36 || !domain.bot_reportable_status(payload.status) || len(payload.status_reason) > 200 ||
        payload.used < 0 || payload.holding_yes < 0 || payload.holding_no < 0 || payload.spread_ticks < 0 {
         return err("INVALID_HEARTBEAT");
     }
-    return (s.store.record_heartbeat)(s.store.context, payload);
+    let recorded = (s.store.record_heartbeat)(s.store.context, payload);
+    guard let d = recorded else let e = err_of(recorded) {
+        return err(e);
+    }
+    let params_res = (s.store.get_params)(s.store.context, payload.bot_id, payload.market_id);
+    guard let found = params_res else let e = err_of(params_res) {
+        return err(e);
+    }
+    if let p = found {
+        d.params = p;
+    }
+    return ok(d);
 }
 
 pub fn save_decisions[C](s: TreasuryService[C], records: [domain.BotDecisionRecord]) -> result[bool, str] {

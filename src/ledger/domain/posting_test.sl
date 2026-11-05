@@ -169,3 +169,12 @@ fn test_should_build_release_and_consume_that_match_their_hold() {
     bad.holds[0].amount = 31;
     assert(fault_of(bad) == "Malformed");
 }
+
+fn test_should_fund_a_bot_from_issuance_with_a_key_per_top_up() {
+    let tx = bot_funding_tx(alice(), sid(), mkt(), "dddddddd-dddd-4ddd-8ddd-dddddddddddd", 2500);
+    assert(fault_of(tx) == "ok", fault_of(tx));
+    assert(tx.kind == "BOT_FUNDING");
+    assert(tx.business_key == "bot_topup:dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    assert(tx.entries[1].owner.kind == "bot");
+    assert(tx.entries[1].delta == 2500);
+}

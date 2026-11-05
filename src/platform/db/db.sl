@@ -78,20 +78,24 @@ pub fn one_text(d: Db, sql: str, args: [str], deadline: until) -> result[str, st
     return ok(rows[0].t);
 }
 
-gc struct BotKeyRow {
-    bot_id: str
+pub gc struct BotKey {
+    bot_id: str,
+    owner_group: str
 }
 
-pub fn lookup_bot_key(d: Db, key_hash: str, deadline: until) -> result[opt[str], str] {
-    let r: result[[BotKeyRow], str] = zokor.query_all(d.pool,
-        "select bot_id::text from bot_api_keys where key_hash = $1 and revoked_at is null",
+// Only an active BOT account's unrevoked key signs anyone in.
+pub fn lookup_bot_key(d: Db, key_hash: str, deadline: until) -> result[opt[BotKey], str] {
+    let r: result[[BotKey], str] = zokor.query_all(d.pool,
+        "select k.bot_id::text as bot_id, coalesce(a.beneficial_owner_group::text, '') as owner_group " +
+        "from bot_api_keys k join accounts a on a.id = k.bot_id " +
+        "where k.key_hash = $1 and k.revoked_at is null and a.kind = 'BOT' and a.status = 'ACTIVE'",
         [pg.arg_text(key_hash)], deadline);
     guard let rows = r else let e = err_of(r) {
         return err(e);
     }
     if len(rows) > 0 {
-        return ok(some(rows[0].bot_id));
+        return ok(some(rows[0]));
     }
-    let none_id: opt[str] = none;
-    return ok(none_id);
+    let none_key: opt[BotKey] = none;
+    return ok(none_key);
 }

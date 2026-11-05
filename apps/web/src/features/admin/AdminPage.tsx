@@ -4,10 +4,12 @@ import { AdminApprovals } from './Approvals'
 import { AdminMarkets } from './Markets'
 import { AdminResolution } from './Resolution'
 import { AdminShell, type Section } from './Shell'
+import { AdminSources } from './Sources'
 import { AdminTreasury } from './Treasury'
 
 const PAGES: Record<Section, ComponentType> = {
   markets: AdminMarkets,
+  sources: AdminSources,
   resolution: AdminResolution,
   treasury: AdminTreasury,
   approvals: AdminApprovals,

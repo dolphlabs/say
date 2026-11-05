@@ -347,7 +347,9 @@ fn place_order(c: zokor.Ctx[app.App]) -> http.Response {
     guard let view=optional_view else { return fail(c,"MARKET_DEGRADED"); }
     let normalized_result=exchange.normalize(intent,policy,view,time.wall()/1000000,c.state.settings.exchange.view_freshness_ms);
     guard let normalized=normalized_result else let e=err_of(normalized_result) { return validation_failure(c,e); }
-    let request_result=exchange.prepare_admission(intent,normalized,"user","",app.new_uuid(),app.new_uuid(),key,0);
+    let owner_kind="user";
+    if c.local("owner_kind")=="bot" { owner_kind="bot"; }
+    let request_result=exchange.prepare_admission(intent,normalized,owner_kind,c.local("owner_group"),app.new_uuid(),app.new_uuid(),key,0);
     guard let request=request_result else let e=err_of(request_result) { return fail(c,e); }
     let admitted=exchange.admit_order(c.state.order_admission,request);
     guard let receipt=admitted else let e=err_of(admitted) {

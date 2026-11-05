@@ -362,7 +362,8 @@ The bot runner is a standalone daemon binary executing concurrently with the exc
 4. **Heartbeat Worker**: Every 2 seconds, posts operational status to `POST /v1/internal/bots/heartbeat`, signed in with the bot's API key:
    - Bot status label, current inventory (`yes`, `no`), budget utilized, spread, and last quote timestamp.
    - The bot is the key's owner; the body names only the market. A bot can report `QUOTING` or a `PULLED_*` state, never a pause, and an operator's `PAUSED_MANUAL` or global `PAUSED_ALL` is kept whatever it reports.
-   - The reply is `{ "status": ... }`, the status in force after pauses; the runner stops quoting on anything but `QUOTING`.
+   - The reply is the bot's directive: `status` (in force after pauses), `allocated`, `trading_halted`, `params_version` and `params`. The runner stops quoting on anything but `QUOTING`, and also when it has not had a successful heartbeat for 10 seconds.
+   - Each quote round the runner reads the market (status, redemption units, price band, opening price), the book (best bid/ask, last price, freshness), its positions, its balance and its open orders from the API, so a restart or a fill never leaves it working from stale memory. Each placement gets a unique idempotency key, and on shutdown it cancels its quotes in that market.
 5. **Decision Log Batcher**: Receives `bot_decisions` records over a bounded channel (`chan[BotDecision]`, capacity 1,000) and commits them to Postgres every 500 ms in a single batch insert.
 6. **Pause Watcher**: Subscribes to Redis/WebSocket broadcast channel `bots.pause` for instant kill-switch signals.
 
@@ -503,6 +504,14 @@ To match the UI design specifications:
 - `POST /v1/admin/bots/{bot_id}/markets/{market_id}/topup` `{ "amount": 25000, "reason": "..." }`
 - `POST /v1/admin/treasury/season-budget` `{ "season": "...", "amount": 750000, "reason": "..." }`
 - `POST /v1/internal/bots/heartbeat` (bot API key; the bot is the key's owner, see 3.1)
+
+### Provisioning and funding
+
+- `say admin bot create --username <name>` makes a `BOT` account (no password or email, off the leaderboard, in the house beneficial-owner group so house bots never trade with each other) and prints its API key once; only the key's SHA-256 is stored.
+- `say admin bot key --bot <uuid>` issues a new key and revokes every earlier one.
+- `say admin bot assign --bot <uuid> --market <uuid>` adds the bot to an approved or open market, paused with nothing allocated.
+- Money moves only through approvals. `POST /v1/admin/treasury/season-budget` asks for a season's bot budget (two approvers); `POST .../topup` asks for an allocation (one approver, not the requester). A worker applies approved requests every 10 seconds: in one transaction it rechecks the approval's payload hash and the season budget with the season's bot rows locked, posts `BOT_FUNDING` from issuance to the bot's wallet (keyed by the top-up, so it posts once) and raises the allocation. Rejected, stale or expired requests are closed with the reason.
+- Orders placed with a bot key are admitted as `owner_kind = bot` with the house group, so they hold and settle against the bot's wallet.
 
 Pausing a bot (one market or all) sets the pause first, then enqueues a `CancelAll` through the exchange's command queue for each market where the bot has admitted, open or partially filled orders. The pause holds if a cancel fails; the call answers `503 treasury.cancel_failed` and is safe to repeat.
 

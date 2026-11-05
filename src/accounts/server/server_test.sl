@@ -161,6 +161,21 @@ fn delete(r: zokor.Router[app.App], path: str, cookie: str) -> http.Response {
     return r.serve(zokor.request(zokor.Method.DELETE, path).header("cookie", cookie).build());
 }
 
+// The code is the email's only line of exactly six digits, whatever the
+// wording around it.
+fn six_digit_line(text: str) -> str {
+    for line in strings.split(text, "\n") {
+        let b = to_bytes(line);
+        if len(b) != 6 { continue; }
+        let digits = true;
+        for c in b {
+            if c < 48 || c > 57 { digits = false; }
+        }
+        if digits { return line; }
+    }
+    panic("no six-digit code in: " + text);
+}
+
 fn code_sent_to(mail: email.Email, to: str, nth: int) -> str {
     for i in 0..500 {
         let seen = 0;
@@ -168,8 +183,7 @@ fn code_sent_to(mail: email.Email, to: str, nth: int) -> str {
             if m.to[0] == to {
                 seen += 1;
                 if seen == nth {
-                    let at = strings.find(m.text, "is:\n\n");
-                    return strings.slice(m.text, at + 5, at + 11);
+                    return six_digit_line(m.text);
                 }
             }
         }

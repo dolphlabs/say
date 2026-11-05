@@ -109,8 +109,10 @@ pub fn test_should_reject_a_heartbeat_that_claims_a_pause_or_has_bad_numbers() {
     let svc = fake_treasury_service(f);
     let market = "00000000-0000-4000-a000-000000000200";
     let ok_res = record_heartbeat(svc, heartbeat(market, "QUOTING", 0));
-    guard let status = ok_res else { panic("valid heartbeat refused"); }
-    assert(status == "QUOTING");
+    guard let directive = ok_res else { panic("valid heartbeat refused"); }
+    assert(directive.status == "QUOTING");
+    assert(directive.allocated == 5000);
+    assert(directive.params.levels == domain.default_params().levels);
 
     for bad in [heartbeat(market, "PAUSED_MANUAL", 0), heartbeat(market, "PAUSED_ALL", 0),
                 heartbeat(market, "QUOTING", -1), heartbeat("not-a-market", "QUOTING", 0)] {
@@ -138,10 +140,35 @@ pub fn test_patch_params_validation() {
 pub fn test_topup_and_season_budget() {
     let f = fake_store();
     let svc = fake_treasury_service(f);
-    let t_res = topup_budget(svc, "s1", "b1", "m1", 10000, "op_1", "volume increase");
-    guard let _ok1 = t_res else { panic("topup failed"); }
+    let t_res = topup_budget(svc, "b1", "m1", 10000, "op_1", "volume increase");
+    guard let t = t_res else { panic("topup failed"); }
+    assert(t.id == "topup_1");
+    assert(len(t.approval_ids) == 1);
 
     let b_res = propose_season_budget(svc, "s1", 500000, "op_1", "initial budget");
-    guard let appr_id = b_res else { panic("propose_season_budget failed"); }
-    assert(appr_id == "appr_fake_123");
+    guard let b = b_res else { panic("propose_season_budget failed"); }
+    assert(len(b.approval_ids) == 2);
+}
+
+pub fn test_should_refuse_funding_that_is_not_positive_or_too_large_before_asking_anyone() {
+    let f = fake_store();
+    let svc = fake_treasury_service(f);
+    for amt in [0, -5, domain.max_funding_amount() + 1] {
+        let t = topup_budget(svc, "b1", "m1", amt, "op_1", "x");
+        if let _r = t { panic("bad top-up accepted"); }
+        else let e = err_of(t) { assert(e == "INVALID_FUNDING", e); }
+        let b = propose_season_budget(svc, "s1", amt, "op_1", "x");
+        if let _r = b { panic("bad budget accepted"); }
+    }
+    assert(len(f.calls) == 0);
+}
+
+pub fn test_should_refuse_a_bot_username_the_account_rules_would_reject() {
+    let f = fake_store();
+    let svc = fake_treasury_service(f);
+    let bad = create_bot(svc, "Bad Name", "h", "say_bot_abcd");
+    if let _id = bad { panic("bad username accepted"); }
+    let good = create_bot(svc, "mm_football_01", "h", "say_bot_abcd");
+    guard let id = good else { panic("good username refused"); }
+    assert(id == "bot_new");
 }

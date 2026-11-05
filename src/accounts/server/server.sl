@@ -332,25 +332,15 @@ fn unlink_google(c: zokor.Ctx[app.App]) -> http.Response {
     return zokor.no_content();
 }
 
+// Answers once the account is fenced; the deletion worker cancels its
+// orders and anonymises it, retrying until both are done.
 fn delete_me(c: zokor.Ctx[app.App]) -> http.Response {
-    let account_id = c.local("account_id");
-
-    // 1. Cancel all open orders concurrently across markets
-    let m_res = accounts.open_markets_for_account(c.state.accounts, account_id);
-    if let markets_list = m_res {
-        for m_id in markets_list {
-            let _ = app.cancel_all_orders_for_market(c.state, m_id, account_id, app.new_uuid());
-        }
-    }
-
-    // 2. Anonymise account everywhere
-    let anon_res = accounts.anonymise_account(c.state.accounts, account_id);
-    guard let _ok = anon_res else let e = err_of(anon_res) {
-        c.state.settings.server.logger.error("accounts", "anonymise failed: " + e);
+    let r = accounts.request_deletion(c.state.accounts, c.local("account_id"));
+    guard let _ok = r else let e = err_of(r) {
+        c.state.settings.server.logger.error("accounts", "deletion request failed: " + e);
         return zokor.respond(c.errors, "UNAVAILABLE", c.request_id);
     }
-
-    return auth.without_session(zokor.accepted("{}"));
+    return auth.without_session(zokor.accepted(zokor.jobj().set_str("status", "DELETING").render()));
 }
 
 fn change_username(c: zokor.Ctx[app.App]) -> http.Response {

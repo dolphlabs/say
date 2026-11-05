@@ -84,22 +84,43 @@ fn fake_get_params(f: FakeTreasuryStore, bot_id: str, market_id: str) -> result[
     return ok(p);
 }
 
-fn fake_topup_budget(f: FakeTreasuryStore, season: str, bot: str, mkt: str, amt: int, op: str, reason: str) -> result[bool, str] {
-    push(f.calls, "topup " + bot + " " + mkt + " amt=" + to_str(amt));
+fn fake_request_topup(f: FakeTreasuryStore, bot: str, mkt: str, amt: int, op: str, reason: str) -> result[FundingRequest, str] {
+    push(f.calls, "request_topup " + bot + " " + mkt + " amt=" + to_str(amt));
     if len(f.failure) > 0 { return err(f.failure); }
+    return ok(FundingRequest { id: "topup_1", approval_ids: ["appr_1"] });
+}
+
+fn fake_request_season_budget(f: FakeTreasuryStore, season: str, amt: int, op: str, reason: str) -> result[FundingRequest, str] {
+    push(f.calls, "request_season_budget " + season + " amt=" + to_str(amt));
+    if len(f.failure) > 0 { return err(f.failure); }
+    return ok(FundingRequest { id: "budget_1", approval_ids: ["appr_1", "appr_2"] });
+}
+
+fn fake_apply_funding(f: FakeTreasuryStore) -> result[FundingReport, str] {
+    push(f.calls, "apply_funding");
+    let none_problems: [str] = [];
+    return ok(FundingReport { applied: 0, rejected: 0, problems: none_problems });
+}
+
+fn fake_create_bot(f: FakeTreasuryStore, username: str, key_hash: str, key_prefix: str) -> result[str, str] {
+    push(f.calls, "create_bot " + username + " " + key_prefix);
+    return ok("bot_new");
+}
+
+fn fake_issue_bot_key(f: FakeTreasuryStore, bot: str, key_hash: str, key_prefix: str) -> result[bool, str] {
+    push(f.calls, "issue_bot_key " + bot);
     return ok(true);
 }
 
-fn fake_propose_season_budget(f: FakeTreasuryStore, season: str, amt: int, op: str, reason: str) -> result[str, str] {
-    push(f.calls, "propose_season_budget " + season + " amt=" + to_str(amt));
-    if len(f.failure) > 0 { return err(f.failure); }
-    return ok("appr_fake_123");
+fn fake_assign_bot(f: FakeTreasuryStore, bot: str, mkt: str) -> result[bool, str] {
+    push(f.calls, "assign_bot " + bot + " " + mkt);
+    return ok(true);
 }
 
-fn fake_record_heartbeat(f: FakeTreasuryStore, p: domain.HeartbeatPayload) -> result[str, str] {
+fn fake_record_heartbeat(f: FakeTreasuryStore, p: domain.HeartbeatPayload) -> result[domain.BotDirective, str] {
     push(f.calls, "heartbeat " + p.bot_id + " " + p.market_id + " " + p.status);
     if len(f.failure) > 0 { return err(f.failure); }
-    return ok(p.status);
+    return ok(domain.BotDirective { status: p.status, allocated: 5000, trading_halted: false, params_version: 3, params: domain.default_params() });
 }
 
 fn fake_bot_ids(f: FakeTreasuryStore) -> result[[str], str] {
@@ -154,8 +175,12 @@ fn fake_treasury_service(f: FakeTreasuryStore) -> TreasuryService[FakeTreasurySt
         is_all_paused: fake_is_all_paused,
         update_params: fake_update_params,
         get_params: fake_get_params,
-        topup_budget: fake_topup_budget,
-        propose_season_budget: fake_propose_season_budget,
+        request_topup: fake_request_topup,
+        request_season_budget: fake_request_season_budget,
+        apply_funding: fake_apply_funding,
+        create_bot: fake_create_bot,
+        issue_bot_key: fake_issue_bot_key,
+        assign_bot: fake_assign_bot,
         record_heartbeat: fake_record_heartbeat,
         bot_ids: fake_bot_ids
     });

@@ -485,3 +485,46 @@ fn test_should_save_and_clear_a_signed_avatar_and_refuse_a_forged_one() {
     guard let acc2 = gone else { panic("account"); }
     if let _u = acc2.avatar_url { panic("avatar not cleared"); }
 }
+
+fn test_should_fence_then_anonymise_a_deleted_account_and_keep_nothing_personal() {
+    guard let l = live() else { return; }
+    let st = new_store(l.pool, l.cache,
+        GoogleEndpoints { client_id: "client-1", client_secret: "s", token_url: "http://127.0.0.1:9/token", jwks_url: "http://127.0.0.1:9/jwks" },
+        Timeouts { pg_ns: 10000000000, redis_ns: 200000000, google_ns: 1000000000 });
+    let a = service.with_settings(service.new_auth(auth_store(st), config(), service.new_hasher(4, 256, stub_hash, stub_verify), uuid), settings_store(st));
+    let inbox = new_inbox();
+    let name = "dl" + suffix();
+    let s = sign_up(a, inbox, name, "10.9.0.7");
+    let vr = service.verify_signup(a, s.signup_token, code_for(inbox, name + "@it.say"), meta_from("10.9.0.7"));
+    guard let v = vr else let f = err_of(vr) { panic("verify " + inspect(f.why)); }
+    let id = v.account.id;
+    let token = v.session_token;
+    let before = service.authenticate(a, token);
+    guard let signed_in = before else { panic("authenticate failed"); }
+    guard let _session = signed_in else { panic("a fresh session did not authenticate"); }
+
+    let req = service.request_deletion(a, id);
+    guard let _r = req else let e = err_of(req) { panic(e); }
+    assert(count(l.pool, "select count(*)::bigint as n from accounts where id = $1 and status = 'DELETING'", id) == 1);
+    assert(count(l.pool, "select count(*)::bigint as n from sessions where account_id = $1", id) == 0);
+    let after = service.authenticate(a, token);
+    guard let gone = after else { panic("authenticate failed"); }
+    if let _still = gone { panic("a deleting account still authenticates"); }
+    let pending = service.deleting_accounts(a, 500);
+    guard let ids = pending else let e = err_of(pending) { panic(e); }
+    let listed = false;
+    for x in ids { if x == id { listed = true; } }
+    assert(listed);
+
+    let fin = service.finish_deletion(a, id);
+    guard let finished = fin else let e = err_of(fin) { panic(e); }
+    assert(finished);
+    assert(count(l.pool, "select count(*)::bigint as n from accounts where id = $1 and status = 'DELETED' and email is null and username::text like 'deleted\\_%' and avatar_url is null", id) == 1);
+    assert(count(l.pool, "select count(*)::bigint as n from password_credentials where account_id = $1", id) == 0);
+    assert(count(l.pool, "select count(*)::bigint as n from username_reservations where account_id = $1", id) == 0);
+    assert(count(l.pool, "select count(*)::bigint as n from wallets where account_id = $1", id) == 1);
+
+    let twice = service.finish_deletion(a, id);
+    guard let again = twice else let e = err_of(twice) { panic(e); }
+    assert(!again, "an already deleted account was anonymised twice");
+}
