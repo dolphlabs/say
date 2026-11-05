@@ -60,7 +60,7 @@ fn st_candidates(postgres: Postgres, after_id: str, limit: int) -> result[[str],
     let rows: result[[CandidateRow], str] = zokor.query_all(postgres.pool,
         "select m.id::text as id from markets m where ($1='' or m.id>$1::uuid) " +
         "and m.status in ('OPEN','SUSPENDED','CLOSED','RESOLUTION_PENDING','DISPUTED','RESOLVED','VOIDED','SETTLING','SETTLED') " +
-        "and m.runtime_status<>'DEGRADED' and (" +
+        "and (m.runtime_status<>'DEGRADED' or m.runtime_changed_at<clock_timestamp()-interval '5 seconds') and (" +
         "m.runtime_status<>'READY' or not exists(select 1 from market_owners o join runtime_nodes n on n.id=o.node_id " +
         "where o.market_id=m.id and o.epoch=m.owner_epoch and o.lease_until>clock_timestamp() " +
         "and n.live_until>clock_timestamp() and not n.draining) or exists " +

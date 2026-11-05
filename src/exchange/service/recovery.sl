@@ -8,7 +8,13 @@ pub fn recover_book[C](store: RecoveryStore[C], market_id: str, initial_capacity
     }
     let load=store.load;
     let loaded=load(store.context,market_id);
-    guard let data=loaded else let e=err_of(loaded) { return err(e); }
+    guard let first=loaded else let e=err_of(loaded) { return err(e); }
+    let data=first;
+    if first.committed_seq==0 && first.rolling_hash=="" {
+        let seeded=seed_genesis(store,first);
+        guard let reloaded=seeded else let e=err_of(seeded) { return err(e); }
+        data=reloaded;
+    }
     if data.policy.market_id!=market_id || data.committed_seq<0 || data.pairs<0 ||
        len(data.rolling_hash)!=64 || data.base_seq<0 || data.base_seq>data.committed_seq ||
        (data.mode!="OPEN" && data.mode!="SUSPENDED" && data.mode!="CLOSED") {
@@ -48,6 +54,22 @@ pub fn recover_book[C](store: RecoveryStore[C], market_id: str, initial_capacity
     }
     if !projection_ok { return err("RECOVERY_PROJECTION_MISMATCH"); }
     return ok(recovered);
+}
+
+// Opening a market in the registry leaves its hash empty: the registry does
+// not know the exchange's hashing. Its economics are locked from then on, so
+// the genesis hash computed here is the one every node would compute.
+fn seed_genesis[C](store: RecoveryStore[C], data: RecoveryData) -> result[RecoveryData, str] {
+    if data.pairs!=0 || data.base_seq!=0 || len(data.snapshots)>0 || len(data.steps)>0 {
+        return err("RECOVERY_STATE_MISMATCH");
+    }
+    let created=core.new_book(data.policy,1,0);
+    guard let book=created else let e=err_of(created) { return err("RECOVERY_BOOK:"+e); }
+    let seed=store.seed_genesis;
+    let written=seed(store.context,data.policy.market_id,core.snapshot(&book).state_hash);
+    guard let _written=written else let e=err_of(written) { return err(e); }
+    let load=store.load;
+    return load(store.context,data.policy.market_id);
 }
 
 fn restore_candidate(policy: core.Policy,candidate: RecoverySnapshot,steps: [RecoveryStep],initial_capacity: int) -> result[core.Book,str] {

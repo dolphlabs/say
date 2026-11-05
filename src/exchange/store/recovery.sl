@@ -51,6 +51,15 @@ fn st_quarantine(postgres: Postgres,market: str,node: str,epoch: int,reason: str
     return ok(true);
 }
 
+fn st_seed_genesis(postgres: Postgres,market: str,hash: str) -> result[bool,str] {
+    let rows: result[[SnapshotSavedRow],str]=zokor.query_all(postgres.pool,
+        "update markets set rolling_hash=$2 where id=$1::uuid and committed_seq=0 and rolling_hash is null "+
+        "returning id::text as id",
+        [pg.arg_text(market),pg.arg_text(hash)],deadline(postgres));
+    guard let seeded=rows else let e=err_of(rows) { return err(e); }
+    return ok(len(seeded)==1);
+}
+
 fn st_verify_epoch(postgres: Postgres,snapshot: service.SnapshotWrite,pending: int,controls: int) -> result[int,str] {
     return zokor.transaction(postgres.pool,
         VerifyEpochArg { postgres:postgres,snapshot:snapshot,pending:pending,controls:controls },
@@ -188,7 +197,9 @@ fn load_recovery_tx(conn: pg.Conn,arg: RecoveryArg) -> result[service.RecoveryDa
     guard let rows=markets else let e=err_of(markets) { return err(e); }
     if len(rows)!=1 { return err("MARKET_NOT_FOUND"); }
     let market=rows[0];
-    if market.V<1 || market.committed_seq<0 || market.rolling_hash=="" { return err("RECOVERY_MARKET_INVALID"); }
+    if market.V<1 || market.committed_seq<0 || (market.rolling_hash=="" && market.committed_seq!=0) {
+        return err("RECOVERY_MARKET_INVALID");
+    }
     let stored_snapshots:result[[RecoverySnapshotRow],str]=zokor.conn_query_all(conn,
         "select committed_seq,state_hash,full_hash,schema_version,payload::text as payload "+
         "from market_snapshots where market_id=$1::uuid and committed_seq<=$2 and committed_seq>=greatest(0,$2-100000) "+

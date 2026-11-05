@@ -66,6 +66,7 @@ pub fn recovery_store(postgres: Postgres) -> service.RecoveryStore[Postgres] {
     return service.RecoveryStore[Postgres] {
         context: postgres,
         load: st_load_recovery,
+        seed_genesis: st_seed_genesis,
         save_snapshot: st_save_snapshot,
         reconcile_projection: st_reconcile_projection,
         verify_epoch: st_verify_epoch,

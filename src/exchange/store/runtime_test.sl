@@ -234,3 +234,41 @@ fn test_runtime_takeover_verifies_new_epoch_before_draining_admitted_work() {
     assert(is_ready);
     schema_close(r);
 }
+
+fn test_runtime_recovers_a_freshly_opened_market_from_its_genesis() {
+    guard let r=schema_rig() else { return; }
+    runtime_setup(r);
+    schema_exec(r.owner,"update markets set rolling_hash=null where id=$1::uuid",[pg.arg_text(r.market)]);
+    let a=runtime_account(r,427);
+    let actor=runtime_actor(r);
+    let created=core.new_book(schema_policy(r),4,0);
+    guard let genesis=created else { panic("genesis book"); }
+    let stored=schema_text(r.owner,"select rolling_hash as value from markets where id=$1::uuid",[pg.arg_text(r.market)]);
+    assert(stored==core.snapshot(&genesis).state_hash, stored);
+    let placed=runtime_place(r,actor,a,"YES","BUY",40,3);
+    assert(placed.decision=="ACCEPTED", placed.decision);
+    schema_close(r);
+}
+
+fn test_runtime_discovery_retries_a_degraded_market_after_five_seconds() {
+    guard let r=schema_rig() else { return; }
+    runtime_setup(r);
+    let ownership=service.new_ownership(ownership_store(new_postgres(r.app,10000000000)));
+    let released=service.release(ownership,r.market,r.node,1);
+    guard let _released=released else let e=err_of(released) { panic(e); }
+    schema_exec(r.owner,"update markets set runtime_status='DEGRADED',runtime_reason='RECOVERY_HASH_MISMATCH',"+
+        "runtime_changed_at=clock_timestamp() where id=$1::uuid",[pg.arg_text(r.market)]);
+    let fresh=service.candidates(ownership,"",500);
+    guard let waiting=fresh else let e=err_of(fresh) { panic(e); }
+    assert(len(waiting)==0);
+    schema_exec(r.owner,"update markets set runtime_changed_at=clock_timestamp()-interval '6 seconds' where id=$1::uuid",[pg.arg_text(r.market)]);
+    let later=service.candidates(ownership,"",500);
+    guard let due=later else let e=err_of(later) { panic(e); }
+    assert(len(due)==1 && due[0]==r.market);
+    let claimed=service.acquire(ownership,r.market,r.node,30);
+    guard let claim=claimed else let e=err_of(claimed) { panic(e); }
+    assert(claim.acquired && claim.epoch==2);
+    let status=schema_text(r.owner,"select runtime_status as value from markets where id=$1::uuid",[pg.arg_text(r.market)]);
+    assert(status=="RECOVERING", status);
+    schema_close(r);
+}

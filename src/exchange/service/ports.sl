@@ -198,6 +198,7 @@ pub gc struct SnapshotWrite {
 pub gc struct RecoveryStore[C] {
     context: C,
     load: fn(C, str) -> result[RecoveryData, str],
+    seed_genesis: fn(C, str, str) -> result[bool, str],
     save_snapshot: fn(C, SnapshotWrite) -> result[bool, str],
     reconcile_projection: fn(C, str, core.Snapshot) -> result[bool, str],
     verify_epoch: fn(C, SnapshotWrite, int, int) -> result[int, str],
